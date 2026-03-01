@@ -637,6 +637,11 @@ pub(crate) struct AppSettings {
     )]
     pub(crate) experimental_collaboration_modes_enabled: bool,
     #[serde(
+        default = "default_codex_mode_enforcement_enabled",
+        rename = "codexModeEnforcementEnabled"
+    )]
+    pub(crate) codex_mode_enforcement_enabled: bool,
+    #[serde(
         default = "default_experimental_steer_enabled",
         rename = "experimentalSteerEnabled"
     )]
@@ -646,6 +651,21 @@ pub(crate) struct AppSettings {
         rename = "experimentalUnifiedExecEnabled"
     )]
     pub(crate) experimental_unified_exec_enabled: bool,
+    #[serde(
+        default = "default_chat_canvas_use_normalized_realtime",
+        rename = "chatCanvasUseNormalizedRealtime"
+    )]
+    pub(crate) chat_canvas_use_normalized_realtime: bool,
+    #[serde(
+        default = "default_chat_canvas_use_unified_history_loader",
+        rename = "chatCanvasUseUnifiedHistoryLoader"
+    )]
+    pub(crate) chat_canvas_use_unified_history_loader: bool,
+    #[serde(
+        default = "default_chat_canvas_use_presentation_profile",
+        rename = "chatCanvasUsePresentationProfile"
+    )]
+    pub(crate) chat_canvas_use_presentation_profile: bool,
     #[serde(default = "default_dictation_enabled", rename = "dictationEnabled")]
     pub(crate) dictation_enabled: bool,
     #[serde(default = "default_dictation_model_id", rename = "dictationModelId")]
@@ -659,6 +679,11 @@ pub(crate) struct AppSettings {
         rename = "composerEditorPreset"
     )]
     pub(crate) composer_editor_preset: String,
+    #[serde(
+        default = "default_composer_send_shortcut",
+        rename = "composerSendShortcut"
+    )]
+    pub(crate) composer_send_shortcut: String,
     #[serde(
         default = "default_composer_fence_expand_on_space",
         rename = "composerFenceExpandOnSpace"
@@ -724,7 +749,7 @@ impl Default for BackendMode {
 }
 
 fn default_access_mode() -> String {
-    "current".to_string()
+    "full-access".to_string()
 }
 
 fn default_remote_backend_host() -> String {
@@ -748,11 +773,12 @@ fn default_show_message_anchors() -> bool {
 }
 
 fn default_ui_font_family() -> String {
-    "\"SF Pro Text\", \"SF Pro Display\", -apple-system, \"Helvetica Neue\", sans-serif".to_string()
+    "Monaco, \"SF Pro Text\", \"SF Pro Display\", -apple-system, \"Helvetica Neue\", sans-serif"
+        .to_string()
 }
 
 fn default_code_font_family() -> String {
-    "\"SF Mono\", \"SFMono-Regular\", Menlo, Monaco, monospace".to_string()
+    "Monaco, \"SF Mono\", \"SFMono-Regular\", Menlo, monospace".to_string()
 }
 
 fn default_code_font_size() -> u8 {
@@ -856,11 +882,27 @@ fn default_experimental_collaboration_modes_enabled() -> bool {
     false
 }
 
+fn default_codex_mode_enforcement_enabled() -> bool {
+    true
+}
+
 fn default_experimental_steer_enabled() -> bool {
     false
 }
 
 fn default_experimental_unified_exec_enabled() -> bool {
+    false
+}
+
+fn default_chat_canvas_use_normalized_realtime() -> bool {
+    false
+}
+
+fn default_chat_canvas_use_unified_history_loader() -> bool {
+    false
+}
+
+fn default_chat_canvas_use_presentation_profile() -> bool {
     false
 }
 
@@ -878,6 +920,10 @@ fn default_dictation_hold_key() -> String {
 
 fn default_composer_editor_preset() -> String {
     "default".to_string()
+}
+
+fn default_composer_send_shortcut() -> String {
+    "enter".to_string()
 }
 
 fn default_composer_fence_expand_on_space() -> bool {
@@ -983,7 +1029,7 @@ impl Default for AppSettings {
             remote_backend_host: default_remote_backend_host(),
             remote_backend_token: None,
             default_engine: None,
-            default_access_mode: "current".to_string(),
+            default_access_mode: "full-access".to_string(),
             composer_model_shortcut: default_composer_model_shortcut(),
             composer_access_shortcut: default_composer_access_shortcut(),
             composer_reasoning_shortcut: default_composer_reasoning_shortcut(),
@@ -1016,13 +1062,18 @@ impl Default for AppSettings {
             preload_git_diffs: default_preload_git_diffs(),
             experimental_collab_enabled: false,
             experimental_collaboration_modes_enabled: false,
+            codex_mode_enforcement_enabled: true,
             experimental_steer_enabled: false,
             experimental_unified_exec_enabled: false,
+            chat_canvas_use_normalized_realtime: false,
+            chat_canvas_use_unified_history_loader: false,
+            chat_canvas_use_presentation_profile: false,
             dictation_enabled: false,
             dictation_model_id: default_dictation_model_id(),
             dictation_preferred_language: None,
             dictation_hold_key: default_dictation_hold_key(),
             composer_editor_preset: default_composer_editor_preset(),
+            composer_send_shortcut: default_composer_send_shortcut(),
             composer_fence_expand_on_space: default_composer_fence_expand_on_space(),
             composer_fence_expand_on_enter: default_composer_fence_expand_on_enter(),
             composer_fence_language_tags: default_composer_fence_language_tags(),
@@ -1106,7 +1157,7 @@ mod tests {
         assert!(matches!(settings.backend_mode, BackendMode::Local));
         assert_eq!(settings.remote_backend_host, "127.0.0.1:4732");
         assert!(settings.remote_backend_token.is_none());
-        assert_eq!(settings.default_access_mode, "current");
+        assert_eq!(settings.default_access_mode, "full-access");
         assert_eq!(
             settings.composer_model_shortcut.as_deref(),
             Some("cmd+shift+m")
@@ -1170,18 +1221,23 @@ mod tests {
         assert_eq!(settings.theme, "system");
         assert!(!settings.usage_show_remaining);
         assert!(settings.show_message_anchors);
-        assert!(settings.ui_font_family.contains("SF Pro Text"));
-        assert!(settings.code_font_family.contains("SF Mono"));
+        assert!(settings.ui_font_family.starts_with("Monaco"));
+        assert!(settings.code_font_family.starts_with("Monaco"));
         assert_eq!(settings.code_font_size, 11);
         assert!(settings.notification_sounds_enabled);
         assert!(settings.system_notification_enabled);
         assert!(settings.preload_git_diffs);
         assert!(!settings.experimental_steer_enabled);
+        assert!(settings.codex_mode_enforcement_enabled);
+        assert!(!settings.chat_canvas_use_normalized_realtime);
+        assert!(!settings.chat_canvas_use_unified_history_loader);
+        assert!(!settings.chat_canvas_use_presentation_profile);
         assert!(!settings.dictation_enabled);
         assert_eq!(settings.dictation_model_id, "base");
         assert!(settings.dictation_preferred_language.is_none());
         assert_eq!(settings.dictation_hold_key, "alt");
         assert_eq!(settings.composer_editor_preset, "default");
+        assert_eq!(settings.composer_send_shortcut, "enter");
         assert!(!settings.composer_fence_expand_on_space);
         assert!(!settings.composer_fence_expand_on_enter);
         assert!(!settings.composer_fence_language_tags);

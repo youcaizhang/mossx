@@ -16,12 +16,12 @@ import "./styles/base.css";
 import "./styles/buttons.css";
 import "./styles/sidebar.css";
 import "./styles/home.css";
-import "./styles/workspace-home.css";
 import "./styles/main.css";
 import "./styles/messages.css";
 import "./styles/approval-toasts.css";
 import "./styles/error-toasts.css";
 import "./styles/request-user-input.css";
+import "./styles/ask-user-question-dialog.css";
 import "./styles/update-toasts.css";
 import "./styles/composer.css";
 import "./styles/review-inline.css";
@@ -50,10 +50,12 @@ import "./styles/git-history.css";
 import "./styles/search-palette.css";
 import "./styles/panel-lock.css";
 import "./styles/spec-hub.css";
+import "./styles/workspace-home.css";
 import successSoundUrl from "./assets/success-notification.mp3";
 import errorSoundUrl from "./assets/error-notification.mp3";
 import { AppLayout } from "./features/app/components/AppLayout";
 import { AppModals } from "./features/app/components/AppModals";
+import { AskUserQuestionDialog } from "./features/app/components/AskUserQuestionDialog";
 import { LockScreenOverlay } from "./features/app/components/LockScreenOverlay";
 import { MainHeaderActions } from "./features/app/components/MainHeaderActions";
 import { useLayoutNodes } from "./features/layout/hooks/useLayoutNodes";
@@ -139,11 +141,14 @@ import { SpecHub } from "./features/spec/components/SpecHub";
 import { SearchPalette } from "./features/search/components/SearchPalette";
 import { useUnifiedSearch } from "./features/search/hooks/useUnifiedSearch";
 import { loadHistoryWithImportance } from "./features/composer/hooks/useInputHistoryStore";
+import { forceRefreshAgents } from "./features/composer/components/ChatInputBox/providers";
 import { recordSearchResultOpen } from "./features/search/ranking/recencyStore";
 import type { SearchContentFilter, SearchResult, SearchScope } from "./features/search/types";
 import { toggleSearchContentFilters } from "./features/search/utils/contentFilters";
 import {
+  getSelectedAgentConfig,
   getOpenCodeAgentsList,
+  setSelectedAgentConfig,
   getWorkspaceFiles,
   pickWorkspacePath,
   readPanelLockPasswordFile,
@@ -157,6 +162,7 @@ import type {
   EngineType,
   MessageSendOptions,
   OpenCodeAgentOption,
+  SelectedAgentOption,
   WorkspaceInfo,
 } from "./types";
 import { getClientStoreSync, writeClientStoreValue } from "./services/clientStorage";
@@ -184,13 +190,14 @@ const GitHubPanelData = lazy(() =>
   })),
 );
 
-const PANEL_LOCK_DEFAULT_PASSWORD = "123456";
+const PANEL_LOCK_INITIAL_PASSWORD = "000000";
 const LOCK_LIVE_SESSION_LIMIT = 12;
 const LOCK_LIVE_PREVIEW_MAX = 180;
 const OPENCODE_VARIANT_OPTIONS = ["minimal", "low", "medium", "high", "max"];
 const GIT_HISTORY_PANEL_MIN_HEIGHT = 260;
 const GIT_HISTORY_PANEL_MIN_TOP_CLEARANCE = 120;
 const GIT_HISTORY_PANEL_DEFAULT_RATIO = 0.5;
+const APP_JANK_DEBUG_FLAG_KEY = "mossx.debug.jank";
 
 type ThreadCompletionTracker = {
   isProcessing: boolean;
@@ -214,6 +221,13 @@ function clampGitHistoryPanelHeight(height: number, viewportHeight = getViewport
 function getDefaultGitHistoryPanelHeight(): number {
   const viewportHeight = getViewportHeight();
   return clampGitHistoryPanelHeight(viewportHeight * GIT_HISTORY_PANEL_DEFAULT_RATIO, viewportHeight);
+}
+
+function isJankDebugEnabled(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.localStorage.getItem(APP_JANK_DEBUG_FLAG_KEY) === "1";
 }
 
 function normalizeLockLiveSnippet(text: string, maxLength = LOCK_LIVE_PREVIEW_MAX) {
@@ -318,7 +332,8 @@ function MainApp() {
     clearDebugEntries,
   } = useDebugLog();
   useLiquidGlassEffect({ reduceTransparency, onDebug: addDebugEntry });
-  const [accessMode, setAccessMode] = useState<AccessMode>("current");
+  const [accessMode, setAccessMode] = useState<AccessMode>("full-access");
+  const claudeAccessModeRef = useRef<AccessMode>("full-access");
   const [activeTab, setActiveTab] = useState<
     "projects" | "codex" | "spec" | "git" | "log"
   >("codex");
@@ -503,11 +518,11 @@ function MainApp() {
 
   const { errorToasts, dismissErrorToast } = useErrorToasts();
 
+  // Force accessMode to "full-access" (Auto Mode)
+  // Other modes are temporarily disabled in ModeSelect component
   useEffect(() => {
-    setAccessMode((prev) =>
-      prev === "current" ? appSettings.defaultAccessMode : prev
-    );
-  }, [appSettings.defaultAccessMode]);
+    setAccessMode("full-access");
+  }, []);
 
   const {
     gitIssues,
@@ -575,6 +590,7 @@ function MainApp() {
     handleActiveDiffPath,
     handleGitPanelModeChange,
     activeEditorFilePath,
+    editorNavigationTarget,
     openFileTabs,
     handleOpenFile,
     handleActivateFileTab,
@@ -599,7 +615,10 @@ function MainApp() {
     startLine: number;
     endLine: number;
   } | null>(null);
-  const [fileReferenceMode, setFileReferenceMode] = useState<"path" | "none">("path");
+  const [fileReferenceMode, setFileReferenceMode] = useState<"path" | "none">("none");
+  const [editorSplitLayout, setEditorSplitLayout] = useState<"vertical" | "horizontal">(
+    "vertical",
+  );
 
   useEffect(() => {
     if (!activeEditorFilePath) {
@@ -657,7 +676,6 @@ function MainApp() {
   const { skills } = useSkills({ activeWorkspace, onDebug: addDebugEntry });
   const {
     activeEngine,
-    availableEngines,
     installedEngines,
     setActiveEngine,
     engineModelsAsOptions,
@@ -674,6 +692,69 @@ function MainApp() {
   const [openCodeDefaultVariantByWorkspace, setOpenCodeDefaultVariantByWorkspace] = useState<
     Record<string, string | null>
   >({});
+  const [selectedAgent, setSelectedAgent] = useState<SelectedAgentOption | null>(null);
+
+  const reloadSelectedAgent = useCallback(async () => {
+    try {
+      const selected = await getSelectedAgentConfig();
+      const agent = selected.agent;
+      setSelectedAgent(
+        agent
+          ? {
+              id: agent.id,
+              name: agent.name,
+              prompt: agent.prompt ?? null,
+            }
+          : null,
+      );
+    } catch (error) {
+      addDebugEntry({
+        id: `${Date.now()}-agent-selected-load-error`,
+        timestamp: Date.now(),
+        source: "error",
+        label: "agent/selected load error",
+        payload: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [addDebugEntry]);
+
+  const handleSelectAgent = useCallback(
+    (agent: SelectedAgentOption | null) => {
+      const normalized =
+        agent && agent.id.trim().length > 0
+          ? {
+              id: agent.id.trim(),
+              name: agent.name.trim(),
+              prompt: agent.prompt ?? null,
+            }
+          : null;
+      setSelectedAgent(normalized);
+      void setSelectedAgentConfig(normalized?.id ?? null)
+        .then((result) => {
+          if (!result.agent) {
+            if (!normalized) {
+              setSelectedAgent(null);
+            }
+            return;
+          }
+          setSelectedAgent({
+            id: result.agent.id,
+            name: result.agent.name,
+            prompt: result.agent.prompt ?? null,
+          });
+        })
+        .catch((error) => {
+          addDebugEntry({
+            id: `${Date.now()}-agent-selected-save-error`,
+            timestamp: Date.now(),
+            source: "error",
+            label: "agent/selected save error",
+            payload: error instanceof Error ? error.message : String(error),
+          });
+        });
+    },
+    [addDebugEntry],
+  );
 
   useEffect(() => {
     if (activeEngine !== "opencode") {
@@ -825,6 +906,31 @@ function MainApp() {
     return effectiveModels.find((m) => m.id === effectiveSelectedModelId) ?? null;
   }, [effectiveModels, effectiveSelectedModelId]);
 
+  // Sync accessMode when switching engines (Codex forces full-access, Claude restores saved mode)
+  useEffect(() => {
+    if (activeEngine === "codex") {
+      setAccessMode((prev) => {
+        if (prev !== "full-access") {
+          claudeAccessModeRef.current = prev;
+        }
+        return "full-access";
+      });
+    } else {
+      setAccessMode(claudeAccessModeRef.current);
+    }
+  }, [activeEngine]);
+
+  // Keep claudeAccessModeRef in sync when user changes mode on a non-codex engine
+  const handleSetAccessMode = useCallback(
+    (mode: AccessMode) => {
+      setAccessMode(mode);
+      if (activeEngine !== "codex") {
+        claudeAccessModeRef.current = mode;
+      }
+    },
+    [activeEngine],
+  );
+
   useComposerShortcuts({
     textareaRef: composerInputRef,
     modelShortcut: appSettings.composerModelShortcut,
@@ -838,7 +944,7 @@ function MainApp() {
     selectedCollaborationModeId,
     onSelectCollaborationMode: setSelectedCollaborationModeId,
     accessMode,
-    onSelectAccessMode: setAccessMode,
+    onSelectAccessMode: handleSetAccessMode,
     reasoningOptions,
     selectedEffort,
     onSelectEffort: setSelectedEffort,
@@ -853,7 +959,7 @@ function MainApp() {
     selectedCollaborationModeId,
     onSelectCollaborationMode: setSelectedCollaborationModeId,
     accessMode,
-    onSelectAccessMode: setAccessMode,
+    onSelectAccessMode: handleSetAccessMode,
     reasoningOptions,
     selectedEffort,
     onSelectEffort: setSelectedEffort,
@@ -875,9 +981,11 @@ function MainApp() {
     activeEngine,
     workspaceId: activeWorkspace?.id ?? null,
   });
+  const workspaceFilesPollingEnabled = !isCompact && !rightPanelCollapsed && filePanelMode === "files";
   const { files, directories, gitignoredFiles, isLoading: isFilesLoading, refreshFiles } = useWorkspaceFiles({
     activeWorkspace,
     onDebug: addDebugEntry,
+    pollingEnabled: workspaceFilesPollingEnabled,
   });
   const { branches, checkoutBranch, createBranch } = useGitBranches({
     activeWorkspace,
@@ -1036,6 +1144,8 @@ function MainApp() {
     selectedEffort: resolvedEffort,
     resolvedModel,
   });
+  const threadAccessMode =
+    accessMode === "default" ? "current" : accessMode;
 
   const {
     setActiveThreadId,
@@ -1114,14 +1224,46 @@ function MainApp() {
     model: resolvedModel,
     effort: resolvedEffort,
     collaborationMode: collaborationModePayload,
-    accessMode,
+    accessMode: threadAccessMode,
     steerEnabled: appSettings.experimentalSteerEnabled,
     customPrompts: prompts,
     onMessageActivity: queueGitStatusRefresh,
     activeEngine,
+    useNormalizedRealtimeAdapters: appSettings.chatCanvasUseNormalizedRealtime,
+    useUnifiedHistoryLoader: appSettings.chatCanvasUseUnifiedHistoryLoader,
     resolveOpenCodeAgent: resolveOpenCodeAgentForThread,
     resolveOpenCodeVariant: resolveOpenCodeVariantForThread,
   });
+  const hydratedThreadListWorkspaceIdsRef = useRef(new Set<string>());
+  const listThreadsForWorkspaceTracked = useCallback(
+    async (
+      workspace: WorkspaceInfo,
+      options?: { preserveState?: boolean },
+    ) => {
+      await listThreadsForWorkspace(workspace, options);
+      hydratedThreadListWorkspaceIdsRef.current.add(workspace.id);
+    },
+    [listThreadsForWorkspace],
+  );
+  const ensureWorkspaceThreadListLoaded = useCallback(
+    (
+      workspaceId: string,
+      options?: { preserveState?: boolean; force?: boolean },
+    ) => {
+      const workspace = workspacesById.get(workspaceId);
+      if (!workspace) {
+        return;
+      }
+      const force = options?.force ?? false;
+      if (!force && hydratedThreadListWorkspaceIdsRef.current.has(workspaceId)) {
+        return;
+      }
+      void listThreadsForWorkspaceTracked(workspace, {
+        preserveState: options?.preserveState,
+      });
+    },
+    [listThreadsForWorkspaceTracked, workspacesById],
+  );
   const {
     activeAccount,
     accountSwitching,
@@ -1164,6 +1306,17 @@ function MainApp() {
     }
     previousThreadIdRef.current = activeThreadId ?? null;
   }, [activeThreadId]);
+
+  useEffect(() => {
+    void reloadSelectedAgent();
+  }, [activeThreadId, reloadSelectedAgent]);
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      forceRefreshAgents();
+      void reloadSelectedAgent();
+    }
+  }, [reloadSelectedAgent, settingsOpen]);
 
   const selectedOpenCodeAgent = useMemo(
     () => resolveOpenCodeAgentForThread(activeThreadId),
@@ -1261,7 +1414,7 @@ function MainApp() {
     renameWorktreeUpstream,
     onRenameSuccess: (workspace) => {
       resetWorkspaceThreads(workspace.id);
-      void listThreadsForWorkspace(workspace);
+      void listThreadsForWorkspaceTracked(workspace);
       if (activeThreadId && activeWorkspaceId === workspace.id) {
         void refreshThread(workspace.id, activeThreadId);
       }
@@ -1423,7 +1576,7 @@ function MainApp() {
     try {
       const filePassword = await readPanelLockPasswordFile();
       if (filePassword == null) {
-        void writePanelLockPasswordFile(PANEL_LOCK_DEFAULT_PASSWORD);
+        void writePanelLockPasswordFile(PANEL_LOCK_INITIAL_PASSWORD);
         setIsPanelLocked(false);
         return true;
       }
@@ -1446,6 +1599,7 @@ function MainApp() {
       exitDiffView();
       setAppMode("chat");
       setActiveTab("codex");
+      collapseRightPanel();
       setSelectedKanbanTaskId(null);
       selectWorkspace(workspaceId);
       setActiveThreadId(threadId, workspaceId);
@@ -1457,6 +1611,7 @@ function MainApp() {
     },
     [
       exitDiffView,
+      collapseRightPanel,
       setAppMode,
       selectWorkspace,
       setActiveEngine,
@@ -1581,17 +1736,22 @@ function MainApp() {
   const activePlan = activeThreadId
     ? planByThread[activeThreadId] ?? null
     : null;
+  const initializedCollaborationModeThreadsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (activeEngine !== "codex" || !activeThreadId) {
       return;
     }
-    if (selectedCollaborationModeId === "plan") {
-      return;
-    }
     if (activeItems.length > 0) {
+      initializedCollaborationModeThreadsRef.current.add(activeThreadId);
       return;
     }
-    setSelectedCollaborationModeId("plan");
+    if (initializedCollaborationModeThreadsRef.current.has(activeThreadId)) {
+      return;
+    }
+    initializedCollaborationModeThreadsRef.current.add(activeThreadId);
+    if (selectedCollaborationModeId !== "plan") {
+      setSelectedCollaborationModeId("plan");
+    }
   }, [
     activeEngine,
     activeItems.length,
@@ -1618,11 +1778,14 @@ function MainApp() {
   const showKanban = appMode === "kanban";
   const showGitHistory = appMode === "gitHistory";
   const [selectedKanbanTaskId, setSelectedKanbanTaskId] = useState<string | null>(null);
+  const [workspaceHomeWorkspaceId, setWorkspaceHomeWorkspaceId] = useState<string | null>(null);
   const showHome = !activeWorkspace && !showKanban;
   const showWorkspaceHome = Boolean(
     activeWorkspace &&
+      workspaceHomeWorkspaceId === activeWorkspace.id &&
       !activeThreadId &&
-      (isCompact ? activeTab === "codex" : activeTab !== "spec"),
+      appMode === "chat" &&
+      (isCompact ? (isTablet ? tabletTab : activeTab) === "codex" : activeTab !== "spec"),
   );
   const canInterrupt = activeThreadId
     ? threadStatusById[activeThreadId]?.isProcessing ?? false
@@ -1683,6 +1846,68 @@ function MainApp() {
     onDraftChange: handleDraftChange,
     textareaRef: composerInputRef,
   });
+  const perfSnapshotRef = useRef({
+    activeThreadId: null as string | null,
+    isProcessing: false,
+    activeItems: 0,
+    filesLoading: false,
+    files: 0,
+    directories: 0,
+    filePanelMode: "git" as "git" | "files" | "prompts" | "memory",
+    rightPanelCollapsed: false,
+    isCompact: false,
+    draftLength: 0,
+  });
+  useEffect(() => {
+    perfSnapshotRef.current = {
+      activeThreadId,
+      isProcessing,
+      activeItems: activeItems.length,
+      filesLoading: isFilesLoading,
+      files: files.length,
+      directories: directories.length,
+      filePanelMode,
+      rightPanelCollapsed,
+      isCompact,
+      draftLength: activeDraft.length,
+    };
+  }, [
+    activeDraft.length,
+    activeItems.length,
+    activeThreadId,
+    directories.length,
+    filePanelMode,
+    files.length,
+    isCompact,
+    isFilesLoading,
+    isProcessing,
+    rightPanelCollapsed,
+  ]);
+  useEffect(() => {
+    if (!import.meta.env.DEV || !isJankDebugEnabled() || typeof window === "undefined") {
+      return;
+    }
+    let rafId = 0;
+    let lastFrameAt = performance.now();
+    const monitor = (timestamp: number) => {
+      const delta = timestamp - lastFrameAt;
+      if (delta >= 120) {
+        const snapshot = perfSnapshotRef.current;
+        console.warn("[perf][jank]", {
+          frameGapMs: Number(delta.toFixed(2)),
+          ...snapshot,
+        });
+      }
+      lastFrameAt = timestamp;
+      rafId = window.requestAnimationFrame(monitor);
+    };
+    rafId = window.requestAnimationFrame(monitor);
+    return () => {
+      if (rafId) {
+        window.cancelAnimationFrame(rafId);
+      }
+    };
+  }, []);
 
   const activeWorkspaceKanbanTasks = useMemo(
     () => {
@@ -1695,6 +1920,31 @@ function MainApp() {
     () => (activeWorkspaceId ? threadsByWorkspace[activeWorkspaceId] ?? [] : []),
     [activeWorkspaceId, threadsByWorkspace],
   );
+  const RECENT_THREAD_LIMIT = 8;
+  const recentThreads = useMemo(() => {
+    if (!activeWorkspaceId) {
+      return [];
+    }
+    const threads = threadsByWorkspace[activeWorkspaceId] ?? [];
+    if (threads.length === 0) {
+      return [];
+    }
+    return [...threads]
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, RECENT_THREAD_LIMIT)
+      .map((thread) => {
+        const status = threadStatusById[thread.id];
+        return {
+          id: thread.id,
+          workspaceId: activeWorkspaceId,
+          threadId: thread.id,
+          title: thread.name?.trim() || t("threads.untitledThread"),
+          updatedAt: thread.updatedAt,
+          isProcessing: status?.isProcessing ?? false,
+          isReviewing: status?.isReviewing ?? false,
+        };
+      });
+  }, [activeWorkspaceId, threadStatusById, threadsByWorkspace, t]);
   useEffect(() => {
     if (!activeWorkspaceId) {
       return;
@@ -1809,35 +2059,6 @@ function MainApp() {
     activeWorkspaceId,
     workspaceNameByPath,
   });
-
-  const RECENT_THREAD_LIMIT = 8;
-  const { recentThreads } = useMemo(() => {
-    if (!activeWorkspaceId) {
-      return { recentThreads: [] };
-    }
-    const threads = threadsByWorkspace[activeWorkspaceId] ?? [];
-    if (threads.length === 0) {
-      return { recentThreads: [] };
-    }
-    const sorted = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
-    const slice = sorted.slice(0, RECENT_THREAD_LIMIT);
-    const summaries = slice.map((thread) => {
-      const status = threadStatusById[thread.id];
-      const displayName = thread.name?.trim() || t("threads.untitledThread");
-      return {
-        id: thread.id,
-        workspaceId: activeWorkspaceId,
-        threadId: thread.id,
-        title: displayName,
-        updatedAt: thread.updatedAt,
-        isProcessing: status?.isProcessing ?? false,
-        isReviewing: status?.isReviewing ?? false,
-      };
-    });
-    return {
-      recentThreads: summaries,
-    };
-  }, [activeWorkspaceId, threadStatusById, threadsByWorkspace, t]);
 
   const lockLiveSessions = useMemo(() => {
     const sessions = workspaces.flatMap((workspace) => {
@@ -2164,12 +2385,14 @@ function MainApp() {
     workspaces,
     hasLoaded,
     connectWorkspace,
-    listThreadsForWorkspace
+    activeWorkspaceId,
+    listThreadsForWorkspace: listThreadsForWorkspaceTracked,
   });
   useWorkspaceRefreshOnFocus({
     workspaces,
     refreshWorkspaces,
-    listThreadsForWorkspace
+    activeWorkspaceId,
+    listThreadsForWorkspace: listThreadsForWorkspaceTracked,
   });
 
   const {
@@ -2247,6 +2470,11 @@ function MainApp() {
     removeThread,
     t,
   ]);
+
+  const handleOpenSearchPalette = useCallback(() => {
+    setIsSearchPaletteOpen(true);
+    setSearchPaletteSelectedIndex(0);
+  }, []);
 
   useGlobalSearchShortcut({
     isEnabled: true,
@@ -2526,6 +2754,26 @@ function MainApp() {
     [composerLinkedKanbanPanels, selectedComposerKanbanPanelId],
   );
 
+  const mergeSelectedAgentOption = useCallback(
+    (options?: MessageSendOptions): MessageSendOptions | undefined => {
+      if (activeEngine === "opencode") {
+        return options;
+      }
+      const merged: MessageSendOptions = {
+        ...(options ?? {}),
+        selectedAgent: selectedAgent
+          ? {
+              id: selectedAgent.id,
+              name: selectedAgent.name,
+              prompt: selectedAgent.prompt ?? null,
+            }
+          : null,
+      };
+      return merged;
+    },
+    [activeEngine, selectedAgent],
+  );
+
   const handleComposerSendWithKanban = useCallback(
     async (
       text: string,
@@ -2539,7 +2787,11 @@ function MainApp() {
       if (!panelId || !activeWorkspaceId || isPullRequestComposer) {
         const fallbackText =
           textForSending.length > 0 ? textForSending : trimmedOriginalText;
-        await handleComposerSend(fallbackText, images, options);
+        await handleComposerSend(
+          fallbackText,
+          images,
+          mergeSelectedAgentOption(options),
+        );
         return;
       }
 
@@ -2548,7 +2800,7 @@ function MainApp() {
         await handleComposerSend(
           textForSending.length > 0 ? textForSending : trimmedOriginalText,
           images,
-          options,
+          mergeSelectedAgentOption(options),
         );
         return;
       }
@@ -2613,7 +2865,7 @@ function MainApp() {
           resolvedThreadId,
           textForSending,
           images,
-          options,
+          mergeSelectedAgentOption(options),
         );
       }
 
@@ -2642,6 +2894,7 @@ function MainApp() {
     [
       resolveComposerKanbanPanel,
       handleComposerSend,
+      mergeSelectedAgentOption,
       activeWorkspaceId,
       workspacesById,
       connectWorkspace,
@@ -2681,66 +2934,79 @@ function MainApp() {
       images: string[],
       options?: MessageSendOptions,
     ) => {
-      await handleComposerQueue(text, images, options);
+      await handleComposerQueue(text, images, mergeSelectedAgentOption(options));
       if (!isCompact && centerMode === "editor") {
         setCenterMode("chat");
       }
     },
-    [centerMode, handleComposerQueue, isCompact, setCenterMode],
+    [centerMode, handleComposerQueue, isCompact, mergeSelectedAgentOption, setCenterMode],
   );
 
   const handleSelectWorkspaceInstance = useCallback(
     (workspaceId: string, threadId: string) => {
       exitDiffView();
       resetPullRequestSelection();
+      setWorkspaceHomeWorkspaceId(null);
       setAppMode("chat");
       setActiveTab("codex");
+      collapseRightPanel();
       selectWorkspace(workspaceId);
       setActiveThreadId(threadId, workspaceId);
+      const threads = threadsByWorkspace[workspaceId] ?? [];
+      const thread = threads.find((entry) => entry.id === threadId);
+      if (thread?.engineSource) {
+        setActiveEngine(thread.engineSource);
+      }
     },
     [
       exitDiffView,
+      collapseRightPanel,
       resetPullRequestSelection,
-      setAppMode,
       selectWorkspace,
-      setActiveTab,
+      setActiveEngine,
       setActiveThreadId,
+      threadsByWorkspace,
     ],
   );
 
-  const handleStartWorkspaceConversation = useCallback(async (engine: EngineType = "claude") => {
-    if (!activeWorkspace) {
-      return;
-    }
-    try {
-      if (!activeWorkspace.connected) {
-        await connectWorkspace(activeWorkspace);
-      }
-      await setActiveEngine(engine);
-      const threadId = await startThreadForWorkspace(activeWorkspace.id, {
-        activate: true,
-        engine,
-      });
-      if (!threadId) {
+  const handleStartWorkspaceConversation = useCallback(
+    async (engine: EngineType = "claude") => {
+      if (!activeWorkspace) {
         return;
       }
-      setActiveThreadId(threadId, activeWorkspace.id);
-      if (isCompact) {
-        setActiveTab("codex");
+      try {
+        setWorkspaceHomeWorkspaceId(null);
+        if (!activeWorkspace.connected) {
+          await connectWorkspace(activeWorkspace);
+        }
+        await setActiveEngine(engine);
+        const threadId = await startThreadForWorkspace(activeWorkspace.id, {
+          activate: true,
+          engine,
+        });
+        if (!threadId) {
+          return;
+        }
+        setActiveThreadId(threadId, activeWorkspace.id);
+        collapseRightPanel();
+        if (isCompact) {
+          setActiveTab("codex");
+        }
+      } catch (error) {
+        alertError(error);
       }
-    } catch (error) {
-      alertError(error);
-    }
-  }, [
-    activeWorkspace,
-    alertError,
-    connectWorkspace,
-    isCompact,
-    setActiveEngine,
-    setActiveTab,
-    setActiveThreadId,
-    startThreadForWorkspace,
-  ]);
+    },
+    [
+      activeWorkspace,
+      alertError,
+      collapseRightPanel,
+      connectWorkspace,
+      isCompact,
+      setActiveEngine,
+      setActiveThreadId,
+      startThreadForWorkspace,
+    ],
+  );
 
   const handleContinueLatestConversation = useCallback(() => {
     const latest = recentThreads[0];
@@ -2757,6 +3023,7 @@ function MainApp() {
         return;
       }
       try {
+        setWorkspaceHomeWorkspaceId(null);
         if (!activeWorkspace.connected) {
           await connectWorkspace(activeWorkspace);
         }
@@ -2769,6 +3036,7 @@ function MainApp() {
           return;
         }
         setActiveThreadId(threadId, activeWorkspace.id);
+        collapseRightPanel();
         await sendUserMessageToThread(activeWorkspace, threadId, normalizedPrompt);
         if (isCompact) {
           setActiveTab("codex");
@@ -2780,11 +3048,11 @@ function MainApp() {
     [
       activeWorkspace,
       alertError,
+      collapseRightPanel,
       connectWorkspace,
       isCompact,
       sendUserMessageToThread,
       setActiveEngine,
-      setActiveTab,
       setActiveThreadId,
       startThreadForWorkspace,
     ],
@@ -2828,10 +3096,7 @@ function MainApp() {
       if (failed.length > 0) {
         const failedReasonLine = failed
           .slice(0, 3)
-          .map(
-            (entry) =>
-              `- ${entry.threadId}: ${t(`workspace.deleteErrorCode.${entry.code}`)}`,
-          )
+          .map((entry) => `- ${entry.threadId}: ${t(`workspace.deleteErrorCode.${entry.code}`)}`)
           .join("\n");
         alertError(
           `${t("workspace.deleteConversationsPartial", {
@@ -3206,8 +3471,10 @@ function MainApp() {
   };
 
   const showComposer = Boolean(selectedKanbanTaskId) || ((!isCompact
-    ? (centerMode === "chat" || centerMode === "diff" || centerMode === "editor") && !showSpecHub
-    : (isTablet ? tabletTab : activeTab) === "codex") && !showWorkspaceHome);
+    ? (centerMode === "chat" || centerMode === "diff" || centerMode === "editor") &&
+      !showSpecHub &&
+      !showWorkspaceHome
+    : (isTablet ? tabletTab : activeTab) === "codex" && !showWorkspaceHome));
   const showGitDetail = Boolean(selectedDiffPath) && isPhone;
   const isThreadOpen = Boolean(activeThreadId && showComposer);
   const handleSelectDiffForPanel = useCallback(
@@ -3251,6 +3518,35 @@ function MainApp() {
     },
     [addDebugEntry, addWorkspaceFromPath, normalizeWorkspacePath, setActiveWorkspaceId, workspaces],
   );
+
+  const handleOpenSpecHub = useCallback(() => {
+    setAppMode("chat");
+    setCenterMode("chat");
+    setActiveTab((current) => (current === "spec" ? "codex" : "spec"));
+  }, []);
+
+  const handleOpenWorkspaceHome = useCallback(() => {
+    exitDiffView();
+    resetPullRequestSelection();
+    setAppMode("chat");
+    setCenterMode("chat");
+    setActiveTab("codex");
+    if (activeWorkspaceId) {
+      setWorkspaceHomeWorkspaceId(activeWorkspaceId);
+      selectWorkspace(activeWorkspaceId);
+      setActiveThreadId(null, activeWorkspaceId);
+      return;
+    }
+    setWorkspaceHomeWorkspaceId(null);
+    selectHome();
+  }, [
+    activeWorkspaceId,
+    exitDiffView,
+    resetPullRequestSelection,
+    selectHome,
+    selectWorkspace,
+    setActiveThreadId,
+  ]);
 
   useArchiveShortcut({
     isEnabled: isThreadOpen,
@@ -3315,11 +3611,7 @@ function MainApp() {
   useMenuLocalization();
   const dropOverlayActive = isWorkspaceDropActive;
   const dropOverlayText = "Drop Project Here";
-  const showWorkspaceView = Boolean(
-    activeWorkspace && !showHome && !showKanban,
-  );
-  const shouldShowSidebarTopbarContent =
-    !showGitHistory && !isCompact && !sidebarCollapsed && showWorkspaceView;
+  const shouldShowSidebarTopbarContent = false;
   const appClassName = `app ${isCompact ? "layout-compact" : "layout-desktop"}${
     isPhone ? " layout-phone" : ""
   }${isTablet ? " layout-tablet" : ""}${
@@ -3386,23 +3678,28 @@ function MainApp() {
     handleApprovalRemember,
     handleUserInputSubmit,
     onOpenSettings: () => openSettings(),
+    onOpenAgentSettings: () => openSettings("agents"),
     onOpenDictationSettings: () => openSettings("dictation"),
     onOpenDebug: handleDebugClick,
     showDebugButton,
     onAddWorkspace: handleAddWorkspace,
     onSelectHome: () => {
       resetPullRequestSelection();
+      setWorkspaceHomeWorkspaceId(null);
       selectHome();
     },
     onSelectWorkspace: (workspaceId) => {
       exitDiffView();
       resetPullRequestSelection();
+      setWorkspaceHomeWorkspaceId(null);
       setCenterMode("chat");
       selectWorkspace(workspaceId);
+      ensureWorkspaceThreadListLoaded(workspaceId);
       setActiveThreadId(null, workspaceId);
     },
     onConnectWorkspace: async (workspace) => {
       await connectWorkspace(workspace);
+      ensureWorkspaceThreadListLoaded(workspace.id, { force: true });
       if (isCompact) {
         setActiveTab("codex");
       }
@@ -3417,11 +3714,16 @@ function MainApp() {
       }
       void updateWorkspaceSettings(workspaceId, {
         sidebarCollapsed: collapsed,
+      }).then(() => {
+        if (!collapsed) {
+          ensureWorkspaceThreadListLoaded(workspaceId);
+        }
       });
     },
     onSelectThread: (workspaceId, threadId) => {
       exitDiffView();
       resetPullRequestSelection();
+      setWorkspaceHomeWorkspaceId(null);
       setCenterMode("chat");
       setAppMode("chat");
       setActiveTab("codex");
@@ -3530,7 +3832,7 @@ function MainApp() {
       if (!confirmed) {
         return;
       }
-      void listThreadsForWorkspace(workspace);
+      void listThreadsForWorkspaceTracked(workspace);
     },
     updaterState,
     onUpdate: startUpdate,
@@ -3539,23 +3841,8 @@ function MainApp() {
     onDismissErrorToast: dismissErrorToast,
     latestAgentRuns,
     isLoadingLatestAgents,
-    onSelectHomeThread: (workspaceId, threadId) => {
-      exitDiffView();
-      setAppMode("chat");
-      setActiveTab("codex");
-      selectWorkspace(workspaceId);
-      setActiveThreadId(threadId, workspaceId);
-      // Auto-switch engine based on thread's engineSource
-      const threads = threadsByWorkspace[workspaceId] ?? [];
-      const thread = threads.find((t) => t.id === threadId);
-      if (thread?.engineSource) {
-        setActiveEngine(thread.engineSource);
-      }
-    },
-    onOpenSpecHub: () => {
-      setAppMode("chat");
-      setActiveTab("spec");
-    },
+    onSelectHomeThread: handleSelectWorkspaceInstance,
+    onOpenSpecHub: handleOpenSpecHub,
     activeWorkspace,
     activeParentWorkspace,
     worktreeLabel,
@@ -3585,6 +3872,9 @@ function MainApp() {
         isCompact={isCompact}
         rightPanelCollapsed={rightPanelCollapsed}
         sidebarToggleProps={sidebarToggleProps}
+        showTerminalButton={!isCompact}
+        isTerminalOpen={terminalOpen}
+        onToggleTerminal={handleToggleTerminal}
       />
     ),
     filePanelMode,
@@ -3592,7 +3882,11 @@ function MainApp() {
     fileTreeLoading: isFilesLoading,
     onRefreshFiles: refreshFiles,
     centerMode,
+    editorSplitLayout,
+    onToggleEditorSplitLayout: () =>
+      setEditorSplitLayout((prev) => (prev === "vertical" ? "horizontal" : "vertical")),
     editorFilePath: activeEditorFilePath,
+    editorNavigationTarget,
     openEditorTabs: openFileTabs,
     onActivateEditorTab: handleActivateFileTab,
     onCloseEditorTab: handleCloseFileTab,
@@ -3763,6 +4057,7 @@ function MainApp() {
     onSelectCollaborationMode: setSelectedCollaborationModeId,
     engines: installedEngines,
     selectedEngine: activeEngine,
+    usePresentationProfile: appSettings.chatCanvasUsePresentationProfile,
     onSelectEngine: setActiveEngine,
     models: effectiveModels,
     selectedModelId: effectiveSelectedModelId,
@@ -3774,11 +4069,13 @@ function MainApp() {
     opencodeAgents: openCodeAgents,
     selectedOpenCodeAgent,
     onSelectOpenCodeAgent: handleSelectOpenCodeAgent,
+    selectedAgent,
+    onSelectAgent: handleSelectAgent,
     opencodeVariantOptions: OPENCODE_VARIANT_OPTIONS,
     selectedOpenCodeVariant,
     onSelectOpenCodeVariant: handleSelectOpenCodeVariant,
     accessMode,
-    onSelectAccessMode: setAccessMode,
+    onSelectAccessMode: handleSetAccessMode,
     skills,
     prompts,
     commands,
@@ -3788,6 +4085,7 @@ function MainApp() {
     onInsertComposerText: handleInsertComposerText,
     textareaRef: composerInputRef,
     composerEditorSettings,
+    composerSendShortcut: appSettings.composerSendShortcut,
     textareaHeight,
     onTextareaHeightChange,
     dictationEnabled: appSettings.dictationEnabled && dictationReady,
@@ -3857,23 +4155,9 @@ function MainApp() {
         setActiveTab("git");
       }
     },
+    onOpenGlobalSearch: handleOpenSearchPalette,
+    onOpenWorkspaceHome: handleOpenWorkspaceHome,
   });
-
-  const workspaceHomeNode = activeWorkspace ? (
-    <WorkspaceHome
-      workspace={activeWorkspace}
-      engines={availableEngines}
-      currentBranch={gitStatus.branchName || null}
-      recentThreads={recentThreads}
-      onSelectConversation={handleSelectWorkspaceInstance}
-      onStartConversation={handleStartWorkspaceConversation}
-      onContinueLatestConversation={handleContinueLatestConversation}
-      onStartGuidedConversation={handleStartGuidedConversation}
-      onOpenSpecHub={() => setActiveTab("spec")}
-      onRevealWorkspace={handleRevealActiveWorkspace}
-      onDeleteConversations={handleDeleteWorkspaceConversations}
-    />
-  ) : null;
 
   const specHubNode = shouldMountSpecHub ? (
     <SpecHub
@@ -3885,7 +4169,24 @@ function MainApp() {
     />
   ) : null;
 
+  const workspaceHomeNode = activeWorkspace ? (
+    <WorkspaceHome
+      workspace={activeWorkspace}
+      engines={installedEngines}
+      currentBranch={gitStatus.branchName || null}
+      recentThreads={recentThreads}
+      onSelectConversation={handleSelectWorkspaceInstance}
+      onStartConversation={handleStartWorkspaceConversation}
+      onContinueLatestConversation={handleContinueLatestConversation}
+      onStartGuidedConversation={handleStartGuidedConversation}
+      onOpenSpecHub={handleOpenSpecHub}
+      onRevealWorkspace={handleRevealActiveWorkspace}
+      onDeleteConversations={handleDeleteWorkspaceConversations}
+    />
+  ) : null;
+
   const workspacePrimaryNode = showWorkspaceHome ? workspaceHomeNode : messagesNode;
+
   const mainMessagesNode = shouldMountSpecHub
     ? (
       <div className="workspace-chat-stack">
@@ -3942,6 +4243,8 @@ function MainApp() {
           "--sidebar-width": `${
             isCompact
               ? sidebarWidth
+              : settingsOpen
+                ? 0
               : showGitHistory
                 ? Math.max(sidebarWidth, 360)
                 : sidebarCollapsed
@@ -4022,6 +4325,7 @@ function MainApp() {
         activeTab={activeTab}
         tabletTab={tabletTab}
         centerMode={centerMode}
+        editorSplitLayout={editorSplitLayout}
         hasActivePlan={hasActivePlan}
         activeWorkspace={Boolean(activeWorkspace)}
         sidebarNode={sidebarNodeWithTopbar}
@@ -4124,6 +4428,12 @@ function MainApp() {
           setSearchPaletteQuery("");
           setSearchPaletteSelectedIndex(0);
         }}
+      />
+      <AskUserQuestionDialog
+        requests={userInputRequests}
+        activeThreadId={activeThreadId ?? null}
+        activeWorkspaceId={activeWorkspaceId}
+        onSubmit={handleUserInputSubmit}
       />
       <AppModals
         renamePrompt={renamePrompt}

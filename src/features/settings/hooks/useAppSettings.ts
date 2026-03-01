@@ -18,6 +18,7 @@ import { normalizeOpenAppTargets } from "../../app/utils/openApp";
 import { getDefaultInterruptShortcut } from "../../../utils/shortcuts";
 
 const allowedThemes = new Set(["system", "light", "dark", "dim"]);
+const allowedComposerSendShortcuts = new Set(["enter", "cmdEnter"]);
 const SEARCH_SHORTCUT_DISALLOWED = new Set(["cmd+p", "ctrl+p"]);
 
 function normalizeShortcutValue(value: string | null | undefined): string | null {
@@ -78,13 +79,18 @@ const defaultSettings: AppSettings = {
   preloadGitDiffs: true,
   experimentalCollabEnabled: false,
   experimentalCollaborationModesEnabled: true,
+  codexModeEnforcementEnabled: true,
   experimentalSteerEnabled: false,
   experimentalUnifiedExecEnabled: false,
+  chatCanvasUseNormalizedRealtime: false,
+  chatCanvasUseUnifiedHistoryLoader: false,
+  chatCanvasUsePresentationProfile: false,
   dictationEnabled: false,
   dictationModelId: "base",
   dictationPreferredLanguage: null,
   dictationHoldKey: "alt",
   composerEditorPreset: "default",
+  composerSendShortcut: "enter",
   composerFenceExpandOnSpace: false,
   composerFenceExpandOnEnter: false,
   composerFenceLanguageTags: false,
@@ -131,6 +137,11 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
       DEFAULT_CODE_FONT_FAMILY,
     ),
     codeFontSize: clampCodeFontSize(settings.codeFontSize),
+    codexModeEnforcementEnabled:
+      settings.codexModeEnforcementEnabled !== false,
+    composerSendShortcut: allowedComposerSendShortcuts.has(settings.composerSendShortcut)
+      ? settings.composerSendShortcut
+      : "enter",
     toggleGlobalSearchShortcut: normalizeGlobalSearchShortcut(settings.toggleGlobalSearchShortcut),
     openAppTargets: normalizedTargets,
     selectedOpenAppId,

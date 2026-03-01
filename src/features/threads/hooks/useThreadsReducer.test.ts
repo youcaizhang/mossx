@@ -238,6 +238,57 @@ describe("threadReducer", () => {
     expect(messages[0]?.text).toBe(`${snapshot}\n\n我还可以帮你排查线上问题。`);
   });
 
+  it("avoids appending duplicated body when cumulative snapshot restarts from the middle", () => {
+    const intro = "奶奶您好，您这学习劲头太让人佩服了，我一定认真给您讲清楚，不糊弄您。💪";
+    const firstBody = [
+      "现在就差一步：您还没把“具体问题/全文内容”发给我。",
+      "请您把要讲的内容发我（文字粘贴、截图都行），我马上按这个方式给您讲：",
+      "中英文对照原文（一句中文 + 一句英文）",
+      "每一句的大白话解释（像聊天一样）",
+      "关键词单独解释（这个词到底啥意思）",
+      "举生活例子（让您一听就懂）",
+      "最后总结 + 小复习（帮您彻底记住）",
+      "",
+      "您发来内容后，我就开始。放心，我会讲到您“彻底看懂”为止。",
+    ].join("\n");
+    const shiftedSnapshot = [
+      "现在就差一步：您还没把“具体问题/全文内容”发给我。",
+      "请您把要讲的内容发我（文字粘贴、截图都行），我马上按这个方式给您讲：",
+      "中英文对照原文（一句中文 + 一句英文）",
+      "每一句的大白话解释（像聊天一样）",
+      "关键词单独解释（这个词到底啥意思）",
+      "举生活例子（让您一听就懂）",
+      "最后总结 + 小复习（帮您彻底记住）",
+      "",
+      "您发来内容后，我就开始。奶奶放心，我会讲到您“彻底看懂”为止。",
+    ].join("\n");
+    const fullSnapshot = `${intro}\n\n${firstBody}`;
+    const expectedMerged = `${intro}\n\n${shiftedSnapshot}`;
+    const first = threadReducer(initialState, {
+      type: "appendAgentDelta",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      itemId: "assistant-shifted-1",
+      delta: fullSnapshot,
+      hasCustomName: false,
+    });
+    const second = threadReducer(first, {
+      type: "appendAgentDelta",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      itemId: "assistant-shifted-1",
+      delta: shiftedSnapshot,
+      hasCustomName: false,
+    });
+
+    const messages = (second.itemsByThread["thread-1"] ?? []).filter(
+      (item): item is Extract<ConversationItem, { kind: "message" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.text).toBe(expectedMerged);
+  });
+
   it("removes artificial leading paragraph breaks on tiny cjk fragments", () => {
     const first = threadReducer(initialState, {
       type: "appendAgentDelta",
@@ -355,6 +406,111 @@ describe("threadReducer", () => {
     );
     expect(messages).toHaveLength(1);
     expect(messages[0]?.text).toBe(readable);
+  });
+
+  it("dedupes repeated completed snapshot even when the streamed prefix is slightly different", () => {
+    const fragmented = "你好，我在。要我先帮看代码，排查问题，还是推进某个 OpenSpec 变更？";
+    const readable = "你好，我在。要我先帮你看代码，排查问题，还是推进某个 OpenSpec 变更？";
+    const withFragment = threadReducer(initialState, {
+      type: "appendAgentDelta",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      itemId: "assistant-complete-2",
+      delta: fragmented,
+      hasCustomName: false,
+    });
+    const completed = threadReducer(withFragment, {
+      type: "completeAgentMessage",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+      itemId: "assistant-complete-2",
+      text: `${readable} ${readable}`,
+      hasCustomName: false,
+    });
+
+    const messages = (completed.itemsByThread["thread-1"] ?? []).filter(
+      (item): item is Extract<ConversationItem, { kind: "message" }> =>
+        item.kind === "message" && item.role === "assistant",
+    );
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.text).toBe(readable);
+  });
+
+  it("dedupes five manual QA greeting snapshots and keeps one readable answer", () => {
+    const scenarios = [
+      {
+        id: "manual-greeting-1",
+        delta: "你好，我在。",
+        completed:
+          "你好，我在。想让我先帮你做什么？ 你好，我在。想让我先帮你做什么？",
+        expected: "你好，我在。想让我先帮你做什么？",
+      },
+      {
+        id: "manual-greeting-2",
+        delta: "你好，湘宁。",
+        completed: "我在这，随时可以开始。直接说你现在要做的任务。",
+        expected: "我在这，随时可以开始。直接说你现在要做的任务。",
+      },
+      {
+        id: "manual-greeting-3",
+        delta: "你好，我在。",
+        completed:
+          "你好，我在。想让我先帮你做什么？ 你好，我在。想让我先帮你做什么？",
+        expected: "你好，我在。想让我先帮你做什么？",
+      },
+      {
+        id: "manual-greeting-4",
+        delta: "你好，在线。",
+        completed:
+          "你好，在线。说下现在想做什么，我直接开始。 你好，在线。说下你现在想做什么，我直接开始。",
+        expected: "你好，在线。说下你现在想做什么，我直接开始。",
+      },
+      {
+        id: "manual-greeting-5",
+        delta: "你好！在的。",
+        completed:
+          "你好！在的。要我先帮你处理哪件事？ 你好！在的。要我先帮你处理哪件事？",
+        expected: "你好！在的。要我先帮你处理哪件事？",
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const withDelta = threadReducer(initialState, {
+        type: "appendAgentDelta",
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        itemId: scenario.id,
+        delta: scenario.delta,
+        hasCustomName: false,
+      });
+      const completed = threadReducer(withDelta, {
+        type: "completeAgentMessage",
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        itemId: scenario.id,
+        text: scenario.completed,
+        hasCustomName: false,
+      });
+      const finalized = threadReducer(completed, {
+        type: "upsertItem",
+        workspaceId: "ws-1",
+        threadId: "thread-1",
+        item: {
+          id: scenario.id,
+          kind: "message",
+          role: "assistant",
+          text: scenario.completed,
+        },
+        hasCustomName: false,
+      });
+
+      const messages = (finalized.itemsByThread["thread-1"] ?? []).filter(
+        (item): item is Extract<ConversationItem, { kind: "message" }> =>
+          item.kind === "message" && item.role === "assistant" && item.id === scenario.id,
+      );
+      expect(messages).toHaveLength(1);
+      expect(messages[0]?.text).toBe(scenario.expected);
+    }
   });
 
   it("completes the latest segmented assistant message when it exists", () => {
@@ -969,6 +1125,45 @@ describe("threadReducer", () => {
       workspaceId: "ws-1",
     });
     expect(removed.userInputRequests).toEqual([requestB]);
+  });
+
+  it("clears user input requests by thread while preserving other threads", () => {
+    const requestThreadOne = {
+      workspace_id: "ws-1",
+      request_id: "req-1",
+      params: {
+        thread_id: "thread-1",
+        turn_id: "turn-1",
+        item_id: "item-1",
+        questions: [],
+      },
+    };
+    const requestThreadTwo = {
+      workspace_id: "ws-1",
+      request_id: "req-2",
+      params: {
+        thread_id: "thread-2",
+        turn_id: "turn-2",
+        item_id: "item-2",
+        questions: [],
+      },
+    };
+
+    const stateWithRequests = threadReducer(initialState, {
+      type: "addUserInputRequest",
+      request: requestThreadOne,
+    });
+    const withSecond = threadReducer(stateWithRequests, {
+      type: "addUserInputRequest",
+      request: requestThreadTwo,
+    });
+
+    const cleared = threadReducer(withSecond, {
+      type: "clearUserInputRequestsForThread",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+    });
+    expect(cleared.userInputRequests).toEqual([requestThreadTwo]);
   });
 
   it("hides background threads and keeps them hidden on future syncs", () => {

@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
+  AgentConfig,
+  AgentImportApplyResult,
+  AgentImportPreviewResult,
   AppSettings,
   CodexDoctorResult,
   DictationModelStatus,
@@ -908,6 +911,111 @@ export async function getOpenCodeLspDocumentSymbols(
   return invoke<{ fileUri: string; result: unknown }>("opencode_lsp_document_symbols", {
     workspaceId,
     fileUri,
+  });
+}
+
+export async function getCodeIntelDefinition(
+  workspaceId: string,
+  input: {
+    filePath: string;
+    line: number;
+    character: number;
+  },
+) {
+  return invoke<{
+    filePath: string;
+    line: number;
+    character: number;
+    result: unknown;
+  }>("code_intel_definition", {
+    workspaceId,
+    filePath: input.filePath,
+    line: input.line,
+    character: input.character,
+  });
+}
+
+export async function getCodeIntelReferences(
+  workspaceId: string,
+  input: {
+    filePath: string;
+    line: number;
+    character: number;
+    includeDeclaration?: boolean;
+  },
+) {
+  return invoke<{
+    filePath: string;
+    line: number;
+    character: number;
+    includeDeclaration: boolean;
+    result: unknown;
+  }>("code_intel_references", {
+    workspaceId,
+    filePath: input.filePath,
+    line: input.line,
+    character: input.character,
+    includeDeclaration: input.includeDeclaration ?? false,
+  });
+}
+
+export type LspPosition = {
+  line: number;
+  character: number;
+};
+
+export type LspRange = {
+  start: LspPosition;
+  end: LspPosition;
+};
+
+export type LspLocation = {
+  uri: string;
+  range: LspRange;
+};
+
+export async function getOpenCodeLspDefinition(
+  workspaceId: string,
+  input: {
+    fileUri: string;
+    line: number;
+    character: number;
+  },
+) {
+  return invoke<{
+    fileUri: string;
+    line: number;
+    character: number;
+    result: unknown;
+  }>("opencode_lsp_definition", {
+    workspaceId,
+    fileUri: input.fileUri,
+    line: input.line,
+    character: input.character,
+  });
+}
+
+export async function getOpenCodeLspReferences(
+  workspaceId: string,
+  input: {
+    fileUri: string;
+    line: number;
+    character: number;
+    includeDeclaration?: boolean;
+  },
+) {
+  return invoke<{
+    fileUri: string;
+    line: number;
+    character: number;
+    includeDeclaration: boolean;
+    result: unknown;
+  }>("opencode_lsp_references", {
+    workspaceId,
+    fileUri: input.fileUri,
+    line: input.line,
+    character: input.character,
+    includeDeclaration: input.includeDeclaration ?? false,
   });
 }
 
@@ -1826,6 +1934,16 @@ export async function switchClaudeProvider(id: string): Promise<void> {
   return invoke("vendor_switch_claude_provider", { id });
 }
 
+export async function getClaudeAlwaysThinkingEnabled(): Promise<boolean> {
+  return invoke<boolean>("vendor_get_claude_always_thinking_enabled");
+}
+
+export async function setClaudeAlwaysThinkingEnabled(
+  enabled: boolean,
+): Promise<void> {
+  return invoke("vendor_set_claude_always_thinking_enabled", { enabled });
+}
+
 export async function getCodexProviders(): Promise<any[]> {
   return invoke<any[]>("vendor_get_codex_providers");
 }
@@ -1847,4 +1965,68 @@ export async function deleteCodexProvider(id: string): Promise<void> {
 
 export async function switchCodexProvider(id: string): Promise<void> {
   return invoke("vendor_switch_codex_provider", { id });
+}
+
+// ==================== Agent API ====================
+
+export async function listAgentConfigs(): Promise<AgentConfig[]> {
+  return invoke<AgentConfig[]>("agent_list");
+}
+
+export async function addAgentConfig(agent: AgentConfig): Promise<void> {
+  return invoke("agent_add", { agent });
+}
+
+export async function updateAgentConfig(
+  id: string,
+  updates: Partial<Pick<AgentConfig, "name" | "prompt">>,
+): Promise<void> {
+  return invoke("agent_update", { id, updates });
+}
+
+export async function deleteAgentConfig(id: string): Promise<boolean> {
+  return invoke<boolean>("agent_delete", { id });
+}
+
+export async function getSelectedAgentConfig(): Promise<{
+  selectedAgentId: string | null;
+  agent: AgentConfig | null;
+}> {
+  return invoke<{ selectedAgentId: string | null; agent: AgentConfig | null }>(
+    "agent_get_selected",
+  );
+}
+
+export async function setSelectedAgentConfig(
+  agentId: string | null,
+): Promise<{
+  success: boolean;
+  agent: AgentConfig | null;
+}> {
+  return invoke<{ success: boolean; agent: AgentConfig | null }>("agent_set_selected", {
+    agentId,
+  });
+}
+
+export async function exportAgentConfigs(
+  agentIds: string[],
+  path: string,
+): Promise<void> {
+  return invoke("agent_export", { agentIds, path });
+}
+
+export async function previewImportAgentConfigs(
+  path: string,
+): Promise<AgentImportPreviewResult> {
+  return invoke<AgentImportPreviewResult>("agent_import_preview", { path });
+}
+
+export async function applyImportAgentConfigs(input: {
+  agents: AgentConfig[];
+  strategy: "skip" | "overwrite" | "duplicate";
+}): Promise<AgentImportApplyResult> {
+  return invoke<AgentImportApplyResult>("agent_import_apply", {
+    agents: input.agents,
+    strategy: input.strategy,
+  });
 }

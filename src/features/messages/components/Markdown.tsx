@@ -1,8 +1,9 @@
-import { lazy, memo, Suspense, useEffect, useRef, useState, isValidElement, type ReactNode, type MouseEvent } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, isValidElement, type ReactNode, type MouseEvent } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { useTranslation } from "react-i18next";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 const MermaidBlock = lazy(() => import("./MermaidBlock"));
@@ -514,6 +515,59 @@ function normalizeOutsideCodeFences(
   return changed ? normalized : value;
 }
 
+function safeDecodeUrl(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function stripFileScheme(value: string) {
+  if (!value.startsWith("file://")) {
+    return value;
+  }
+  const withoutScheme = value.slice("file://".length);
+  if (withoutScheme.startsWith("localhost/")) {
+    return `/${withoutScheme.slice("localhost/".length)}`;
+  }
+  if (withoutScheme.startsWith("/")) {
+    return withoutScheme;
+  }
+  return `/${withoutScheme}`;
+}
+
+function isLikelyAbsoluteFilePath(value: string) {
+  if (!value.startsWith("/")) {
+    return false;
+  }
+  const pathBody = value.slice(1);
+  if (!pathBody) {
+    return false;
+  }
+  return pathBody.includes("/") || pathBody.includes(".");
+}
+
+function resolveLocalFileHref(url: string) {
+  const trimmed = url.trim();
+  if (!trimmed || trimmed.startsWith("#")) {
+    return null;
+  }
+  const normalized = stripFileScheme(safeDecodeUrl(trimmed));
+  if (
+    normalized.startsWith("/") ||
+    normalized.startsWith("./") ||
+    normalized.startsWith("../") ||
+    normalized.startsWith("~/")
+  ) {
+    if (normalized.startsWith("/") && !isLikelyAbsoluteFilePath(normalized)) {
+      return null;
+    }
+    return normalized;
+  }
+  return isLinkableFilePath(normalized) ? normalized : null;
+}
+
 function LinkBlock({ urls }: LinkBlockProps) {
   return (
     <div className="markdown-linkblock">
@@ -704,9 +758,7 @@ export const Markdown = memo(function Markdown({
     }
     // Schedule a deferred flush. This timer is NOT cancelled when value
     // changes; it will fire once and read the latest value from the ref.
-    const scheduleTimeout =
-      typeof window !== "undefined" ? window.setTimeout : globalThis.setTimeout;
-    throttleTimerRef.current = scheduleTimeout(() => {
+    throttleTimerRef.current = window.setTimeout(() => {
       throttleTimerRef.current = 0;
       if (!mountedRef.current || typeof window === "undefined") {
         return;
@@ -722,145 +774,204 @@ export const Markdown = memo(function Markdown({
     return () => {
       mountedRef.current = false;
       if (throttleTimerRef.current) {
-        const clearScheduledTimeout =
-          typeof window !== "undefined" ? window.clearTimeout : globalThis.clearTimeout;
-        clearScheduledTimeout(throttleTimerRef.current);
+        window.clearTimeout(throttleTimerRef.current);
         throttleTimerRef.current = 0;
       }
     };
   }, []);
 
   const renderValue = throttledValue;
-  const normalizeDisplayText = (text: string) =>
-    normalizeListIndentation(
-      normalizeFragmentedLineBreaks(normalizeFragmentedParagraphBreaks(text)),
-    );
-  const normalizedValue = codeBlock
-    ? renderValue
-    : normalizeOutsideCodeFences(renderValue, normalizeDisplayText);
-  const content = codeBlock
-    ? `\`\`\`\n${normalizedValue}\n\`\`\``
-    : normalizedValue;
-  const handleFileLinkClick = (event: React.MouseEvent, path: string) => {
+
+  // Memoize heavy text normalization to avoid re-running on every render
+  const content = useMemo(() => {
+    if (codeBlock) {
+      return `\`\`\`\n${renderValue}\n\`\`\``;
+    }
+    const normalizeDisplayText = (text: string) =>
+      normalizeListIndentation(
+        normalizeFragmentedLineBreaks(normalizeFragmentedParagraphBreaks(text)),
+      );
+    return normalizeOutsideCodeFences(renderValue, normalizeDisplayText);
+  }, [renderValue, codeBlock]);
+
+  // Stable callback refs for file link handlers
+  const onOpenFileLinkRef = useRef(onOpenFileLink);
+  onOpenFileLinkRef.current = onOpenFileLink;
+  const onOpenFileLinkMenuRef = useRef(onOpenFileLinkMenu);
+  onOpenFileLinkMenuRef.current = onOpenFileLinkMenu;
+
+  const handleFileLinkClick = useCallback((event: React.MouseEvent, path: string) => {
     event.preventDefault();
     event.stopPropagation();
-    onOpenFileLink?.(path);
-  };
-  const handleFileLinkContextMenu = (
+    onOpenFileLinkRef.current?.(path);
+  }, []);
+  const handleFileLinkContextMenu = useCallback((
     event: React.MouseEvent,
     path: string,
   ) => {
     event.preventDefault();
     event.stopPropagation();
-    onOpenFileLinkMenu?.(event, path);
-  };
-  const components: Components = {
-    a: ({ href, children }) => {
-      const url = href ?? "";
-      if (isFileLinkUrl(url)) {
-        const path = decodeFileLink(url);
+    onOpenFileLinkMenuRef.current?.(event, path);
+  }, []);
+
+  // Memoize ReactMarkdown components to prevent full re-initialization on every render.
+  // This is critical: when components/plugins change reference, ReactMarkdown
+  // discards its entire internal HAST tree and re-parses from scratch.
+  const enableCodexLeadEnhancement = className?.includes("markdown-codex-canvas") ?? false;
+  const components = useMemo<Components>(() => {
+    const result: Components = {
+      a: ({ href, children }) => {
+        const url = href ?? "";
+        if (isFileLinkUrl(url)) {
+          const path = decodeFileLink(url);
+          return (
+            <a
+              href={href}
+              onClick={(event) => handleFileLinkClick(event, path)}
+              onContextMenu={(event) => handleFileLinkContextMenu(event, path)}
+            >
+              {children}
+            </a>
+          );
+        }
+        const localFilePath = resolveLocalFileHref(url);
+        if (localFilePath) {
+          return (
+            <a
+              href={href}
+              onClick={(event) => handleFileLinkClick(event, localFilePath)}
+              onContextMenu={(event) =>
+                handleFileLinkContextMenu(event, localFilePath)
+              }
+            >
+              {children}
+            </a>
+          );
+        }
+        const isExternal =
+          url.startsWith("http://") ||
+          url.startsWith("https://") ||
+          url.startsWith("mailto:");
+
+        if (!isExternal) {
+          return <a href={href}>{children}</a>;
+        }
+
         return (
           <a
             href={href}
-            onClick={(event) => handleFileLinkClick(event, path)}
-            onContextMenu={(event) => handleFileLinkContextMenu(event, path)}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void openUrl(url);
+            }}
           >
             {children}
           </a>
         );
-      }
-      const isExternal =
-        url.startsWith("http://") ||
-        url.startsWith("https://") ||
-        url.startsWith("mailto:");
-
-      if (!isExternal) {
-        return <a href={href}>{children}</a>;
-      }
-
-      return (
-        <a
-          href={href}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            void openUrl(url);
-          }}
-        >
-          {children}
-        </a>
-      );
-    },
-    code: ({ className: codeClassName, children }) => {
-      if (codeClassName) {
-        return <code className={codeClassName}>{children}</code>;
-      }
-      const text = String(children ?? "").trim();
-      if (!text || !isLinkableFilePath(text)) {
-        return <code>{children}</code>;
-      }
-      const href = toFileLink(text);
-      return (
-        <a
-          href={href}
-          onClick={(event) => handleFileLinkClick(event, text)}
-          onContextMenu={(event) => handleFileLinkContextMenu(event, text)}
-        >
-          <code>{children}</code>
-        </a>
-      );
-    },
-  };
-
-  const enableCodexLeadEnhancement = className?.includes("markdown-codex-canvas") ?? false;
-  if (enableCodexLeadEnhancement) {
-    components.p = ({ children }) => {
-      const plainText = flattenNodeText(children);
-      const lead = detectCodexLeadMarker(plainText, codexLeadMarkerConfig);
-      if (!lead) {
-        return <p>{children}</p>;
-      }
-      return (
-        <p className={`markdown-lead-paragraph markdown-lead-${lead.tone}`}>
-          <span className="markdown-lead-icon" aria-hidden>{lead.icon}</span>
-          <span className="markdown-lead-text">{children}</span>
-        </p>
-      );
+      },
+      code: ({ className: codeClassName, children }) => {
+        if (codeClassName) {
+          return <code className={codeClassName}>{children}</code>;
+        }
+        const text = String(children ?? "").trim();
+        if (!text || !isLinkableFilePath(text)) {
+          return <code>{children}</code>;
+        }
+        const href = toFileLink(text);
+        return (
+          <a
+            href={href}
+            onClick={(event) => handleFileLinkClick(event, text)}
+            onContextMenu={(event) => handleFileLinkContextMenu(event, text)}
+          >
+            <code>{children}</code>
+          </a>
+        );
+      },
     };
-  }
 
-  if (codeBlockStyle === "message") {
-    components.pre = ({ node, children }) => (
-      <PreBlock node={node as PreProps["node"]} copyUseModifier={codeBlockCopyUseModifier}>
-        {children}
-      </PreBlock>
-    );
-  }
+    if (enableCodexLeadEnhancement) {
+      result.p = ({ children }) => {
+        const plainText = flattenNodeText(children);
+        const lead = detectCodexLeadMarker(plainText, codexLeadMarkerConfig);
+        if (!lead) {
+          return <p>{children}</p>;
+        }
+        return (
+          <p className={`markdown-lead-paragraph markdown-lead-${lead.tone}`}>
+            <span className="markdown-lead-icon" aria-hidden>{lead.icon}</span>
+            <span className="markdown-lead-text">{children}</span>
+          </p>
+        );
+      };
+    }
+
+    if (codeBlockStyle === "message") {
+      result.pre = ({ node, children }) => (
+        <PreBlock node={node as PreProps["node"]} copyUseModifier={codeBlockCopyUseModifier}>
+          {children}
+        </PreBlock>
+      );
+    }
+
+    return result;
+  }, [
+    handleFileLinkClick,
+    handleFileLinkContextMenu,
+    enableCodexLeadEnhancement,
+    codexLeadMarkerConfig,
+    codeBlockStyle,
+    codeBlockCopyUseModifier,
+  ]);
+
+  // Memoize plugin arrays so ReactMarkdown doesn't re-initialize its processor
+  const remarkPluginsMemo = useMemo(() => [remarkGfm, remarkFileLinks], []);
+  const rehypePluginsMemo = useMemo(
+    () => [
+      rehypeRaw,
+      [rehypeSanitize, {
+        ...defaultSchema,
+        tagNames: [
+          ...(defaultSchema.tagNames ?? []),
+          "details", "summary", "abbr", "mark", "ins", "del",
+          "sub", "sup", "kbd", "var", "samp",
+        ],
+        attributes: {
+          ...defaultSchema.attributes,
+          "*": [...(defaultSchema.attributes?.["*"] ?? []), "className", "class", "style"],
+          "img": [...(defaultSchema.attributes?.["img"] ?? []), "loading"],
+        },
+      }],
+    ] as Parameters<typeof ReactMarkdown>[0]["rehypePlugins"],
+    [],
+  );
+  const urlTransform = useCallback((url: string) => {
+    const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url);
+    if (
+      isFileLinkUrl(url) ||
+      url.startsWith("http://") ||
+      url.startsWith("https://") ||
+      url.startsWith("mailto:") ||
+      url.startsWith("#") ||
+      url.startsWith("/") ||
+      url.startsWith("./") ||
+      url.startsWith("../")
+    ) {
+      return url;
+    }
+    if (!hasScheme) {
+      return url;
+    }
+    return "";
+  }, []);
 
   return (
     <div className={className}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkFileLinks]}
-        rehypePlugins={[rehypeRaw]}
-        urlTransform={(url) => {
-          const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url);
-          if (
-            isFileLinkUrl(url) ||
-            url.startsWith("http://") ||
-            url.startsWith("https://") ||
-            url.startsWith("mailto:") ||
-            url.startsWith("#") ||
-            url.startsWith("/") ||
-            url.startsWith("./") ||
-            url.startsWith("../")
-          ) {
-            return url;
-          }
-          if (!hasScheme) {
-            return url;
-          }
-          return "";
-        }}
+        remarkPlugins={remarkPluginsMemo}
+        rehypePlugins={rehypePluginsMemo}
+        urlTransform={urlTransform}
         components={components}
       >
         {content}

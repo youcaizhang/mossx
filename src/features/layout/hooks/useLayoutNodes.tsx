@@ -1,4 +1,4 @@
-import type { DragEvent, MouseEvent, ReactNode, RefObject } from "react";
+import { useCallback, useMemo, useRef, type DragEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import ArrowLeft from "lucide-react/dist/esm/icons/arrow-left";
 import { Sidebar } from "../../app/components/Sidebar";
@@ -21,6 +21,10 @@ import { TabBar } from "../../app/components/TabBar";
 import { TabletNav } from "../../app/components/TabletNav";
 import { TerminalDock } from "../../terminal/components/TerminalDock";
 import { TerminalPanel } from "../../terminal/components/TerminalPanel";
+import type {
+  EditorNavigationLocation,
+  EditorNavigationTarget,
+} from "../../app/hooks/useGitPanelController";
 import type { ReviewPromptState, ReviewPromptStep } from "../../threads/hooks/useReviewPrompt";
 import type { WorkspaceLaunchScriptsState } from "../../app/hooks/useWorkspaceLaunchScripts";
 import type {
@@ -52,6 +56,7 @@ import type {
   RequestUserInputRequest,
   RequestUserInputResponse,
   SkillOption,
+  SelectedAgentOption,
   ThreadSummary,
   ThreadTokenUsage,
   TurnPlan,
@@ -62,6 +67,11 @@ import type { UpdateState } from "../../update/hooks/useUpdater";
 import type { TerminalSessionState } from "../../terminal/hooks/useTerminalSession";
 import type { TerminalTab } from "../../terminal/hooks/useTerminalTabs";
 import type { ErrorToast } from "../../../services/toasts";
+import type {
+  ConversationEngine,
+  ConversationState,
+} from "../../threads/contracts/conversationCurtainContracts";
+import { resolvePresentationProfile } from "../../messages/presentation/presentationProfile";
 
 type ThreadActivityStatus = {
   isProcessing: boolean;
@@ -188,7 +198,9 @@ type LayoutNodesOptions = {
   onAppModeChange: (mode: AppMode) => void;
   onOpenMemory: () => void;
   onOpenProjectMemory: () => void;
+  onOpenGlobalSearch: () => void;
   onOpenSpecHub: () => void;
+  onOpenWorkspaceHome: () => void;
   updaterState: UpdateState;
   onUpdate: () => void;
   onDismissUpdate: () => void;
@@ -231,13 +243,16 @@ type LayoutNodesOptions = {
   launchScriptsState?: WorkspaceLaunchScriptsState;
   mainHeaderActionsNode?: ReactNode;
   centerMode: "chat" | "diff" | "editor" | "memory";
+  editorSplitLayout: "vertical" | "horizontal";
+  onToggleEditorSplitLayout: () => void;
   editorFilePath: string | null;
+  editorNavigationTarget: EditorNavigationTarget | null;
   openEditorTabs: string[];
   onActivateEditorTab: (path: string) => void;
   onCloseEditorTab: (path: string) => void;
   onCloseAllEditorTabs: () => void;
   onActiveEditorLineRangeChange: (range: { startLine: number; endLine: number } | null) => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, location?: EditorNavigationLocation) => void;
   onExitEditor: () => void;
   onExitDiff: () => void;
   activeTab: "projects" | "codex" | "spec" | "git" | "log";
@@ -417,6 +432,7 @@ type LayoutNodesOptions = {
   // Engine props
   engines?: EngineDisplayInfo[];
   selectedEngine?: EngineType;
+  usePresentationProfile?: boolean;
   onSelectEngine?: (engine: EngineType) => void;
   // Model props
   models: ModelOption[];
@@ -429,6 +445,9 @@ type LayoutNodesOptions = {
   opencodeAgents: OpenCodeAgentOption[];
   selectedOpenCodeAgent: string | null;
   onSelectOpenCodeAgent: (agentId: string | null) => void;
+  selectedAgent: SelectedAgentOption | null;
+  onSelectAgent: (agent: SelectedAgentOption | null) => void;
+  onOpenAgentSettings: () => void;
   opencodeVariantOptions: string[];
   selectedOpenCodeVariant: string | null;
   onSelectOpenCodeVariant: (variant: string | null) => void;
@@ -443,6 +462,7 @@ type LayoutNodesOptions = {
   onInsertComposerText: (text: string) => void;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   composerEditorSettings: ComposerEditorSettings;
+  composerSendShortcut: "enter" | "cmdEnter";
   textareaHeight: number;
   onTextareaHeightChange: (height: number) => void;
   dictationEnabled: boolean;
@@ -562,11 +582,82 @@ function resolveDiffPathFromToolPath(
   return normalizedInput;
 }
 
+const EMPTY_COMMANDS: CustomCommandOption[] = [];
+
+function toConversationEngine(engine: EngineType | undefined): ConversationEngine {
+  if (engine === "claude" || engine === "opencode") {
+    return engine;
+  }
+  return "codex";
+}
+
 export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
   const { t } = useTranslation();
   const activeThreadStatus = options.activeThreadId
     ? options.threadStatusById[options.activeThreadId] ?? null
     : null;
+  const isThreadThinking = activeThreadStatus?.isProcessing ?? false;
+  const conversationEngine = useMemo(
+    () => toConversationEngine(options.selectedEngine),
+    [options.selectedEngine],
+  );
+  // Keep heartbeatPulse in a ref so conversationState doesn't change
+  // on every heartbeat tick — heartbeat only affects WorkingIndicator
+  // which receives it as a separate prop via Messages.
+  const heartbeatPulseRef = useRef(activeThreadStatus?.heartbeatPulse ?? null);
+  heartbeatPulseRef.current = activeThreadStatus?.heartbeatPulse ?? null;
+
+  const conversationState = useMemo<ConversationState>(
+    () => ({
+      items: options.activeItems,
+      plan: options.plan,
+      userInputQueue: options.userInputRequests,
+      meta: {
+        workspaceId: options.activeWorkspace?.id ?? "",
+        threadId: options.activeThreadId ?? "",
+        engine: conversationEngine,
+        activeTurnId: null,
+        isThinking: activeThreadStatus?.isProcessing ?? false,
+        heartbeatPulse: heartbeatPulseRef.current,
+        historyRestoredAtMs: null,
+      },
+    }),
+    [
+      options.activeItems,
+      options.plan,
+      options.userInputRequests,
+      options.activeWorkspace?.id,
+      options.activeThreadId,
+      conversationEngine,
+      activeThreadStatus?.isProcessing,
+    ],
+  );
+  const presentationProfile = useMemo(
+    () =>
+      options.usePresentationProfile
+        ? resolvePresentationProfile(conversationEngine)
+        : null,
+    [options.usePresentationProfile, conversationEngine],
+  );
+  const activeWorkspacePath = options.activeWorkspace?.path ?? null;
+  const gitDiffItems = options.gitDiffs;
+  const onGitDiffListViewChange = options.onGitDiffListViewChange;
+  const onSelectDiff = options.onSelectDiff;
+  const handleOpenDiffPath = useCallback(
+    (path: string) => {
+      const availablePaths = gitDiffItems.map((entry) =>
+        normalizeDiffPath(entry.path),
+      );
+      const resolvedPath = resolveDiffPathFromToolPath(
+        path,
+        availablePaths,
+        activeWorkspacePath,
+      );
+      onGitDiffListViewChange("tree");
+      onSelectDiff(resolvedPath);
+    },
+    [gitDiffItems, activeWorkspacePath, onGitDiffListViewChange, onSelectDiff],
+  );
 
   const sidebarNode = (
     <Sidebar
@@ -625,27 +716,16 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       onAppModeChange={options.onAppModeChange}
       onOpenMemory={options.onOpenMemory}
       onOpenProjectMemory={options.onOpenProjectMemory}
+      onOpenGlobalSearch={options.onOpenGlobalSearch}
       onOpenSpecHub={options.onOpenSpecHub}
+      onOpenWorkspaceHome={options.onOpenWorkspaceHome}
       showTerminalButton={options.showTerminalButton}
       isTerminalOpen={options.terminalOpen}
       onToggleTerminal={options.onToggleTerminal}
     />
   );
 
-  const messagesNode = (
-    (() => {
-      const handleOpenDiffPath = (path: string) => {
-        const availablePaths = options.gitDiffs.map((entry) => normalizeDiffPath(entry.path));
-        const resolvedPath = resolveDiffPathFromToolPath(
-          path,
-          availablePaths,
-          options.activeWorkspace?.path ?? null,
-        );
-        options.onGitDiffListViewChange("tree");
-        options.onSelectDiff(resolvedPath);
-      };
-
-      return (
+  const messagesNode = useMemo(() => (
     <Messages
       items={options.activeItems}
       threadId={options.activeThreadId ?? null}
@@ -657,6 +737,8 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       codeBlockCopyUseModifier={options.codeBlockCopyUseModifier}
       userInputRequests={options.userInputRequests}
       onUserInputSubmit={options.handleUserInputSubmit}
+      conversationState={conversationState}
+      presentationProfile={presentationProfile}
       activeEngine={options.selectedEngine}
       activeCollaborationModeId={options.selectedCollaborationModeId}
       plan={options.plan}
@@ -664,18 +746,53 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       isPlanProcessing={options.isProcessing}
       onOpenDiffPath={handleOpenDiffPath}
       onOpenPlanPanel={options.onOpenPlanPanel}
-      isThinking={
-        options.activeThreadId
-          ? options.threadStatusById[options.activeThreadId]?.isProcessing ?? false
-          : false
-      }
+      onOpenWorkspaceFile={options.onOpenFile}
+      isThinking={isThreadThinking}
       processingStartedAt={activeThreadStatus?.processingStartedAt ?? null}
       lastDurationMs={activeThreadStatus?.lastDurationMs ?? null}
-      heartbeatPulse={activeThreadStatus?.heartbeatPulse ?? 0}
+      heartbeatPulse={heartbeatPulseRef.current ?? 0}
     />
-      );
-    })()
+  ), [
+    options.activeItems,
+    options.activeThreadId,
+    options.activeWorkspace?.id,
+    options.activeWorkspace?.path,
+    options.openAppTargets,
+    options.selectedOpenAppId,
+    options.showMessageAnchors,
+    options.codeBlockCopyUseModifier,
+    options.userInputRequests,
+    options.handleUserInputSubmit,
+    conversationState,
+    presentationProfile,
+    options.selectedEngine,
+    options.selectedCollaborationModeId,
+    options.plan,
+    options.isPlanMode,
+    options.isProcessing,
+    handleOpenDiffPath,
+    options.onOpenPlanPanel,
+    options.onOpenFile,
+    isThreadThinking,
+    activeThreadStatus?.processingStartedAt,
+    activeThreadStatus?.lastDurationMs,
+    // heartbeatPulse removed from deps — uses ref to avoid
+    // recreating messagesNode on every heartbeat tick
+  ]
   );
+
+  const composerSelectedAgent = useMemo(
+    () =>
+      options.selectedAgent
+        ? {
+            id: options.selectedAgent.id,
+            name: options.selectedAgent.name,
+            prompt: options.selectedAgent.prompt ?? undefined,
+          }
+        : null,
+    [options.selectedAgent],
+  );
+  const composerCommands = options.commands ?? EMPTY_COMMANDS;
 
   const composerNode = options.showComposer ? (
     <Composer
@@ -725,6 +842,9 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       opencodeAgents={options.opencodeAgents}
       selectedOpenCodeAgent={options.selectedOpenCodeAgent}
       onSelectOpenCodeAgent={options.onSelectOpenCodeAgent}
+      selectedAgent={composerSelectedAgent}
+      onAgentSelect={options.onSelectAgent}
+      onOpenAgentSettings={options.onOpenAgentSettings}
       opencodeVariantOptions={options.opencodeVariantOptions}
       selectedOpenCodeVariant={options.selectedOpenCodeVariant}
       onSelectOpenCodeVariant={options.onSelectOpenCodeVariant}
@@ -732,12 +852,13 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       onSelectAccessMode={options.onSelectAccessMode}
       skills={options.skills}
       prompts={options.prompts}
-      commands={options.commands ?? []}
+      commands={composerCommands}
       files={options.files}
       directories={options.directories}
       textareaRef={options.textareaRef}
       historyKey={options.activeWorkspace?.id ?? null}
       editorSettings={options.composerEditorSettings}
+      sendShortcut={options.composerSendShortcut}
       textareaHeight={options.textareaHeight}
       onTextareaHeightChange={options.onTextareaHeightChange}
       dictationEnabled={options.dictationEnabled}
@@ -765,16 +886,7 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
       activeThreadId={options.activeThreadId}
       plan={options.plan}
       isPlanMode={options.isPlanMode}
-      onOpenDiffPath={(path) => {
-        const availablePaths = options.gitDiffs.map((entry) => normalizeDiffPath(entry.path));
-        const resolvedPath = resolveDiffPathFromToolPath(
-          path,
-          availablePaths,
-          options.activeWorkspace?.path ?? null,
-        );
-        options.onGitDiffListViewChange("tree");
-        options.onSelectDiff(resolvedPath);
-      }}
+      onOpenDiffPath={handleOpenDiffPath}
       reviewPrompt={options.reviewPrompt}
       onReviewPromptClose={options.onReviewPromptClose}
       onReviewPromptShowPreset={options.onReviewPromptShowPreset}
@@ -1051,6 +1163,8 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
         workspaceId={options.activeWorkspace.id}
         workspacePath={options.activeWorkspace.path}
         filePath={options.editorFilePath}
+        navigationTarget={options.editorNavigationTarget}
+        gitStatusFiles={options.gitStatus.files}
         openTabs={options.openEditorTabs}
         activeTabPath={options.editorFilePath}
         onActivateTab={options.onActivateEditorTab}
@@ -1064,6 +1178,9 @@ export function useLayoutNodes(options: LayoutNodesOptions): LayoutNodesResult {
         openAppIconById={options.openAppIconById}
         selectedOpenAppId={options.selectedOpenAppId}
         onSelectOpenAppId={options.onSelectOpenAppId}
+        editorSplitLayout={options.editorSplitLayout}
+        onToggleEditorSplitLayout={options.onToggleEditorSplitLayout}
+        onNavigateToLocation={options.onOpenFile}
         onClose={options.onExitEditor}
         onInsertText={options.onInsertComposerText}
       />

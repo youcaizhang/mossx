@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createRef } from "react";
 import { afterEach } from "vitest";
@@ -10,12 +10,28 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string) => {
       const translations: Record<string, string> = {
-        "sidebar.projects": "Projects",
         "sidebar.addWorkspace": "Add workspace",
-        "sidebar.openHome": "Open home",
         "sidebar.toggleSearch": "Toggle search",
         "sidebar.searchProjects": "Search projects",
+        "sidebar.quickNewThread": "New Thread",
+        "sidebar.quickAutomation": "Automation",
+        "sidebar.quickSearch": "Search",
+        "sidebar.quickSkills": "Skills",
+        "sidebar.projects": "Projects",
+        "sidebar.mcpSkillsMarket": "MCP & Skills Market",
+        "sidebar.longTermMemory": "Long-term Memory",
+        "sidebar.pluginMarket": "Plugin Market",
         "sidebar.specHub": "Spec Hub",
+        "sidebar.openHome": "Open home",
+        "panels.memory": "Project Memory",
+        "common.terminal": "Terminal",
+        "common.toggleTerminalPanel": "Toggle terminal panel",
+        "git.logMode": "Git",
+        "sidebar.comingSoon": "Coming soon",
+        "sidebar.comingSoonMessage": "This feature is coming soon",
+        "sidebar.threadsSection": "Threads",
+        "settings.title": "Settings",
+        "tabbar.primaryNavigation": "Primary navigation",
       };
       return translations[key] ?? key;
     },
@@ -88,7 +104,9 @@ const baseProps = {
   onAppModeChange: vi.fn(),
   onOpenMemory: vi.fn(),
   onOpenProjectMemory: vi.fn(),
+  onOpenGlobalSearch: vi.fn(),
   onOpenSpecHub: vi.fn(),
+  onOpenWorkspaceHome: vi.fn(),
 };
 
 describe("Sidebar", () => {
@@ -99,30 +117,64 @@ describe("Sidebar", () => {
     expect(screen.queryByLabelText("Search projects")).toBeNull();
   });
 
-  it("renders rail Spec Hub entry", () => {
+  it("hides quick skills entry", () => {
     render(<Sidebar {...baseProps} />);
-    expect(screen.getAllByRole("button", { name: "Spec Hub" }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Skills" })).toBeNull();
   });
 
-  it("opens Spec Hub when clicking the rail entry", () => {
-    const onOpenSpecHub = vi.fn();
-    const { container } = render(<Sidebar {...baseProps} onOpenSpecHub={onOpenSpecHub} />);
-
-    const specHubButton = container.querySelector('button[data-market-item="spec-hub"]');
-    expect(specHubButton).toBeTruthy();
-    if (!specHubButton) {
-      throw new Error("Expected spec hub rail entry");
-    }
-    fireEvent.click(specHubButton);
-
-    expect(onOpenSpecHub).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps rail and project tree containers structurally separated", () => {
+  it("renders quick nav and workspace list containers", () => {
     const { container } = render(<Sidebar {...baseProps} />);
 
-    expect(container.querySelector(".sidebar-tree-rail-column")).toBeTruthy();
+    expect(container.querySelector(".sidebar-primary-nav")).toBeTruthy();
+    expect(container.querySelector(".sidebar-quick-icon-strip")).toBeNull();
     expect(container.querySelector(".sidebar-content-column")).toBeTruthy();
     expect(container.querySelector(".workspace-list")).toBeTruthy();
+    expect(container.querySelector(".sidebar-section-title-icon-image")).toBeNull();
+  });
+
+  it("shows search entry and triggers callback", () => {
+    const onOpenGlobalSearch = vi.fn();
+    render(
+      <Sidebar
+        {...baseProps}
+        onOpenGlobalSearch={onOpenGlobalSearch}
+      />,
+    );
+
+    const searchButton = screen.getByRole("button", { name: "Search" });
+    fireEvent.click(searchButton);
+
+    expect(onOpenGlobalSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides chat/automation/open-home entries in settings dropdown", () => {
+    const onToggleTerminal = vi.fn();
+    const { container } = render(
+      <Sidebar
+        {...baseProps}
+        showTerminalButton
+        isTerminalOpen={false}
+        onToggleTerminal={onToggleTerminal}
+      />,
+    );
+
+    const settingsToggle = container.querySelector(".sidebar-primary-nav-item-bottom");
+    expect(settingsToggle).toBeTruthy();
+    fireEvent.click(settingsToggle as Element);
+
+    const dropdown = container.querySelector(".sidebar-settings-dropdown");
+    expect(dropdown).toBeTruthy();
+    const menu = within(dropdown as HTMLElement);
+
+    expect(menu.queryByRole("menuitem", { name: "New Thread" })).toBeNull();
+    expect(menu.queryByRole("menuitem", { name: "Automation" })).toBeNull();
+    const skillsEntry = menu.getByRole("menuitem", { name: "Skills" });
+    expect((skillsEntry as HTMLButtonElement).disabled).toBe(true);
+    expect(menu.getByRole("menuitem", { name: "Long-term Memory" })).toBeTruthy();
+    expect(menu.getByRole("menuitem", { name: "Spec Hub" })).toBeTruthy();
+    expect(menu.getByRole("menuitem", { name: "Project Memory" })).toBeTruthy();
+    expect(menu.queryByRole("menuitem", { name: "Terminal" })).toBeNull();
+    expect(menu.getByRole("menuitem", { name: "Git" })).toBeTruthy();
+    expect(menu.queryByRole("menuitem", { name: "Open home" })).toBeNull();
   });
 });

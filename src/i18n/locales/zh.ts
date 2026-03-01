@@ -30,6 +30,7 @@ const zh = {
     clear: "清除",
     all: "全部",
     none: "无",
+    thinking: "思考",
     notFound: "未找到",
     truncated: "已截断",
     name: "名称",
@@ -40,7 +41,7 @@ const zh = {
   // 应用
   app: {
     title: "MossX",
-    subtitle: "下一代VibeCoding，何必用IDE",
+    subtitle: "下一代 VibeCoding编辑器",
   },
 
   searchPalette: {
@@ -101,6 +102,7 @@ const zh = {
     resizeGitHistoryPanel: "调整 Git 历史面板大小",
     resizeSidebar: "调整侧边栏宽度",
     resizeRightPanel: "调整右侧面板宽度",
+    resizeEditorSplit: "调整编辑区分栏宽度",
     resizePlanPanel: "调整计划面板高度",
     resizeProjects: "调整项目列表宽度",
   },
@@ -152,6 +154,11 @@ const zh = {
     showThreadsSidebar: "显示对话侧边栏",
     hideGitSidebar: "隐藏右侧边栏",
     showGitSidebar: "显示右侧边栏",
+    quickNewThread: "对话模式",
+    quickAutomation: "面板模式",
+    quickSearch: "搜索",
+    quickSkills: "技能",
+    threadsSection: "项目",
   },
 
   // 首页
@@ -342,6 +349,7 @@ const zh = {
     sidebarProjects: "项目",
     sidebarDisplay: "显示与声音",
     sidebarComposer: "编辑器",
+    sidebarAgents: "智能体",
     sidebarDictation: "语音输入",
     sidebarShortcuts: "快捷键",
     sidebarOpenIn: "打开方式",
@@ -353,6 +361,7 @@ const zh = {
 
     // 通用操作
     closeSettings: "关闭设置",
+    backToApp: "返回应用",
     saving: "保存中...",
     reset: "重置",
     clear: "清除",
@@ -421,6 +430,12 @@ const zh = {
     // Composer 部分
     composerTitle: "编辑器",
     composerDescription: "控制消息编辑器内的辅助功能和格式化行为。",
+    sendShortcutSubtitle: "发送快捷键",
+    sendShortcutSubDescription: "选择消息发送与换行的按键行为。",
+    sendShortcutEnterTitle: "Enter 发送",
+    sendShortcutEnterDesc: "按 Enter 发送消息，Shift+Enter 换行。",
+    sendShortcutCmdEnterTitle: "⌘/Ctrl+Enter 发送",
+    sendShortcutCmdEnterDesc: "按 ⌘/Ctrl+Enter 发送消息，Enter 换行。",
     presetsSubtitle: "预设",
     presetsSubDescription: "选择一个起点并微调下面的开关。",
     preset: "预设",
@@ -665,6 +680,79 @@ const zh = {
 
     // 错误消息
     unableToOpenConfig: "无法打开配置。",
+
+    // ChatInputBox settings keys
+    configure: "配置",
+    agent: {
+      title: "智能体",
+      description: "管理自定义智能体配置，数据与 Claude Code GUI 兼容（~/.codemoss/agent.json）。",
+      create: "创建",
+      export: "导出",
+      import: "导入",
+      customAgents: "自定义智能体",
+      noAgents: "暂无自定义智能体",
+      loading: "加载中...",
+      addSuccess: "智能体创建成功",
+      updateSuccess: "智能体更新成功",
+      deleteSuccess: "智能体删除成功",
+      deleteConfirmTitle: "确认删除",
+      deleteConfirmMessage: "确定要删除智能体“{{name}}”吗？此操作无法撤销。",
+      createAgent: "创建智能体",
+      createAgentHint: "点击跳转到智能体设置页面进行创建",
+      noAgentsDropdown: "暂无智能体",
+      loadFailed: "加载失败",
+      clearAgent: "取消选择智能体",
+      dialog: {
+        addTitle: "创建智能体",
+        editTitle: "编辑智能体",
+        name: "名称",
+        namePlaceholder: "请输入智能体名称",
+        nameInvalid: "名称长度需为 1-20 个字符",
+        prompt: "提示词",
+        promptPlaceholder: "请输入智能体的角色、语气、流程、工具偏好与规则（选填）",
+        promptHint: "提示词会在发送时注入给模型，不改变输入框显示文本。",
+        promptTooLong: "提示词不能超过 100000 个字符",
+        confirmAdd: "创建",
+        saveChanges: "保存",
+      },
+      importDialog: {
+        title: "导入智能体",
+        summary: "共 {{total}} 个智能体：",
+        newCount: "{{count}} 个新建",
+        updateCount: "{{count}} 个更新",
+        selectedCount: "已选择 {{count}} 项",
+        conflictStrategy: "冲突处理策略",
+        strategySkip: "跳过",
+        strategyOverwrite: "覆盖",
+        strategyDuplicate: "复制",
+        columnName: "名称",
+        columnId: "ID",
+        columnStatus: "状态",
+        statusNew: "新建",
+        statusUpdate: "更新",
+        confirmImport: "确认导入",
+        importPartialSuccess: "成功导入 {{imported}} 个，跳过 {{skipped}} 个，更新 {{updated}} 个",
+        exportSuccess: "智能体导出成功",
+      },
+      exportDialog: {
+        title: "导出智能体",
+        selectHint: "选择要导出的智能体",
+        confirmExport: "确认导出",
+      },
+    },
+    provider: {
+      featureComingSoon: "功能暂未实现，敬请期待",
+    },
+    prompt: {
+      noPromptsDropdown: "暂无提示词",
+      createPrompt: "创建提示词",
+      createPromptHint: "点击跳转到提示词设置页面进行创建",
+    },
+    basic: {
+      streaming: {
+        label: "流式传输",
+      },
+    },
   },
 
   // 消息
@@ -672,6 +760,9 @@ const zh = {
     userMessage: "你",
     assistantMessage: "助手",
     thinking: "思考中…",
+    thinkingLabel: "思考",
+    thinkingProcess: "思考过程",
+    noThinkingContent: "无思考内容",
     generating: "生成中…",
     waitingForResponse: "等待响应…",
     copyCode: "复制代码",
@@ -683,7 +774,7 @@ const zh = {
     collapseToolCalls: "收起工具调用",
     message: "条消息",
     messages: "条消息",
-    emptyThread: "开始一个对话，向智能体发送提示词。",
+    emptyThread: "今天想构建什么？向AI提问吧",
     generatingResponse: "正在生成响应...",
     nonStreamingHint: "该模型可能非流式返回，或网络暂不可达，请稍候...",
     opencodeHeartbeatPulse: "心跳 {{pulse}}：{{hint}}",
@@ -704,6 +795,7 @@ const zh = {
     anchorNavigation: "消息锚点",
     anchorJumpToUser: "跳转到用户消息 {{index}}",
     anchorUserTitle: "用户 #{{index}}",
+    showEarlierMessages: "显示之前的 {{count}} 条消息",
   },
 
   // 编辑器
@@ -1425,7 +1517,7 @@ const zh = {
   // 关于
   about: {
     version: "版本",
-    tagline: "下一代 VibeCoding，何必用 IDE",
+    tagline: "下一代 VibeCoding编辑器",
     checkForUpdates: "检查更新",
     releaseNotes: "发布说明",
     reportIssue: "报告问题",
@@ -1852,7 +1944,19 @@ const zh = {
     saveShortcut: "⌘S 保存",
     discardChanges: "放弃更改？",
     discardChangesMessage: "你有未保存的更改，确定放弃吗？",
+    gotoDefinition: "跳转到定义",
+    findReferences: "查找引用",
+    navigating: "跳转中...",
+    searchingReferences: "正在查找引用...",
+    navigationNoDefinition: "当前位置未找到定义",
+    navigationError: "导航请求失败",
+    navigationTimeout: "导航请求超时，请重试",
+    definitionCandidates: "定义候选",
+    referenceResults: "引用结果",
+    noReferencesFound: "未找到引用",
     closeAllTabs: "关闭全部标签",
+    switchToSideBySideSplit: "切换为左右分栏",
+    switchToStackedSplit: "切换为上下分栏",
     discard: "放弃",
     cancel: "取消",
     fileTooLarge: "文件过大，无法编辑",
@@ -2553,6 +2657,23 @@ const zh = {
     submit: "提交",
   },
 
+  askUserQuestion: {
+    title: "Claude 有问题想问你",
+    progress: "问题 {{current}} / {{total}}",
+    timeoutWarning: "请尽快回答，对话框将在 {{seconds}} 秒后自动关闭",
+    collapse: "收起",
+    expand: "展开",
+    clickToAnswer: "点击回答",
+    cancel: "取消",
+    back: "上一步",
+    next: "下一步",
+    submit: "提交",
+    otherOption: "其他",
+    otherOptionDesc: "输入自定义答案",
+    customInputPlaceholder: "请输入你的答案...",
+    multiSelectHint: "可以选择多个选项",
+  },
+
   // 看板
   kanban: {
     mode: {
@@ -2663,7 +2784,7 @@ const zh = {
     elementsTitle: "界面元素介绍",
     elementsDesc: "锁屏页可直接回看核心模块职责，便于团队协作时统一认知。",
     unlockTitle: "解锁面板",
-    unlockDesc: "默认密码文件为 ~/.codemoss/client/pwd.txt，默认值 123456。若文件缺失将允许解锁并自动创建默认密码文件。",
+    unlockDesc: "密码文件为 ~/.codemoss/client/pwd.txt。若文件缺失将允许解锁并自动创建默认密码文件。",
     passwordInput: "输入解锁密码",
     passwordPlaceholder: "请输入密码",
     passwordHint: "输入密码后按 Enter 或点击按钮解锁。",
@@ -2758,6 +2879,9 @@ const zh = {
     emptyPlan: "暂无计划",
     planGenerating: "正在生成计划...",
     planSwitchHint: "切换到 Plan 模式后可查看计划",
+    expand: "展开状态面板",
+    collapse: "收起状态面板",
+    label: "状态面板",
   },
 
   // 工具
@@ -2792,6 +2916,217 @@ const zh = {
     path: "路径",
     lineRange: "第 {{start}}-{{end}} 行",
     failedCount: "{{count}} 个失败",
+  },
+
+  // 聊天输入框
+  chat: {
+    sendMessage: "给 {{provider}} 发送消息",
+    inputPlaceholder: "@引用文件，#唤起智能体，!插入提示词，Enter 发送",
+    inputPlaceholderEnter: "@引用文件，#唤起智能体，!插入提示词，Enter 发送",
+    inputPlaceholderCmdEnter: "@引用文件，#唤起智能体，!插入提示词，\u2318/Ctrl+Enter 发送",
+    sendMessageEnter: "发送消息 (Enter)",
+    sendMessageCmdEnter: "发送消息 (\u2318/Ctrl+Enter)",
+    currentMode: "当前模式: {{mode}}",
+    currentModel: "当前模型: {{model}}",
+    removeAttachment: "移除附件",
+    closePreview: "关闭预览",
+    loadingDropdown: "加载中...",
+    addAttachment: "添加附件",
+    attach: "附件",
+    stopGeneration: "停止生成",
+    generatingResponse: "正在生成响应",
+    elapsedTime: "已用 {{time}}",
+    minutesAndSeconds: "{{minutes}} 分 {{seconds}} 秒",
+    imagePreview: "预览",
+    context: "上下文",
+    usage: "上下文",
+    usagePercentage: "上下文: {{percentage}}",
+    noMatchingFiles: "无匹配文件",
+    noMatchingCommands: "无匹配命令",
+    noMatchingHistory: "无匹配历史",
+    noAvailableAgents: "无可用智能体",
+    openSourceBanner: "本项目保证100%开源（谨防盗版项目）",
+    sdkNotInstalled: "{{provider}} SDK 尚未安装，请先安装 SDK 才能开始对话",
+    sdkStatusLoading: "正在检查 SDK 状态...",
+    goInstallSdk: "前往安装",
+    clearCommandDescription: "清除对话历史并新建会话",
+    loadingFailed: "加载失败",
+    pleaseCloseAndReopen: "请关闭并重新打开窗口",
+    loadingSlashCommands: "正在加载斜杠指令...",
+    pleaseWait: "请稍候...",
+    retrying: "正在重试 ({{count}}/{{max}})...",
+    removeAgent: "移除智能体",
+    removeFileContext: "移除文件上下文",
+    removeContextSelection: "移除已选项",
+    removeFromQueue: "从队列中移除",
+    commands: {
+      clear: "清空当前会话",
+      new: "创建一个新会话",
+      status: "显示当前会话状态",
+      resume: "刷新当前会话",
+      review: "开始代码审查",
+      fork: "从当前对话分叉新线程",
+      mcp: "列出已配置的 MCP 工具",
+      export: "导出当前会话为 JSON",
+      import: "导入会话 JSON 或 URL",
+      lsp: "运行 LSP 诊断/符号查询",
+    },
+  },
+
+  // 权限模式
+  modes: {
+    default: {
+      label: "默认模式",
+      tooltip: "标准权限行为",
+      description: "需要手动确认每个操作，适合谨慎使用",
+    },
+    plan: {
+      label: "规划模式",
+      tooltip: "规划模式——只读分析",
+      description: "仅使用只读工具，生成计划供用户审批后执行",
+    },
+    acceptEdits: {
+      label: "代理模式",
+      tooltip: "自动接受文件编辑",
+      description: "自动接受文件创建/编辑，减少确认步骤",
+    },
+    bypassPermissions: {
+      label: "自动模式",
+      tooltip: "绕过所有权限检查",
+      description: "完全自动化，绕过所有权限检查【谨慎使用】",
+    },
+  },
+
+  // Codex 特定模式
+  codexModes: {
+    default: {
+      label: "建议模式",
+      tooltip: "Codex approval_policy=untrusted：执行命令或写文件前都会弹窗确认。",
+      description: "最安全的选择，每一步都需要你亲自批准。",
+    },
+    plan: {
+      label: "规划模式",
+      tooltip: "规划模式——只读分析",
+      description: "仅使用只读工具，生成计划供用户审批后执行",
+    },
+    acceptEdits: {
+      label: "自动编辑",
+      tooltip: "Codex approval_policy=auto-edit：自动 apply_patch 写文件，命令仍需审批。",
+      description: "自动处理文件创建/编辑，但运行命令前仍会询问。",
+    },
+    bypassPermissions: {
+      label: "全自动",
+      tooltip: "Codex approval_policy=never：命令与写入直接执行（workspace 沙箱仍生效）。",
+      description: "完全免审批，写文件和执行命令立即生效，仅受沙箱限制。",
+    },
+  },
+
+  // 模型标签
+  models: {
+    addModel: "添加模型",
+    claude: {
+      sonnet46: {
+        label: "Sonnet 4.6",
+        description: "Sonnet 4.6 \u00b7 默认推荐模型",
+      },
+      opus46: {
+        label: "Opus 4.6",
+        description: "Opus 4.6 \u00b7 最新最强大的模型",
+      },
+      opus46_1m: {
+        label: "Opus (1M 上下文)",
+        description: "Opus 4.6 长会话模式",
+      },
+      haiku45: {
+        label: "Haiku 4.5",
+        description: "Haiku 速度最快，适合快速答复",
+      },
+    },
+    codex: {
+      gpt53codex: {
+        label: "gpt-5.3-codex",
+        description: "最新前沿智能编程模型，能力全面增强",
+      },
+      gpt53: {
+        label: "gpt-5.3",
+        description: "最新前沿模型，性能显著提升",
+      },
+      gpt52codex: {
+        label: "gpt-5.2-codex",
+        description: "最新前沿智能编程模型",
+      },
+      gpt51codexMax: {
+        label: "gpt-5.1-codex-max",
+        description: "针对Codex优化的旗舰模型，深度与快速推理兼备",
+      },
+      gpt51codexMini: {
+        label: "gpt-5.1-codex-mini",
+        description: "针对Codex优化。更便宜、更快，但性能较差",
+      },
+      gpt52: {
+        label: "gpt-5.2",
+        description: "最新前沿模型，知识储备全面提升",
+      },
+    },
+  },
+
+  // 提示词增强
+  promptEnhancer: {
+    title: "增强提示词",
+    tooltip: "增强提示词",
+    tooltipFull: "重写提示词以提供更多上下文并改善 AI 响应",
+    shortcut: "\u2318/",
+    enhancing: "正在增强提示词...",
+    originalPrompt: "原始提示词",
+    enhancedPrompt: "增强后的提示词",
+    useEnhanced: "使用增强版本",
+    keepOriginal: "保留原始版本",
+    enhanceFailed: "增强提示词失败",
+    emptyPrompt: "请先输入提示词",
+    copyEnhanced: "复制增强版本",
+  },
+
+  // 回溯
+  rewind: {
+    title: "回溯文件到之前的状态",
+    tooltip: "回溯",
+    label: "回溯",
+    tooltipFull: "将文件恢复到此消息时的状态",
+    notAvailable: "当前会话不支持回溯",
+  },
+
+  // 配置
+  config: {
+    switchProvider: "切换供应商",
+  },
+
+  // 推理深度
+  reasoning: {
+    title: "选择思考深度",
+    low: {
+      label: "较少",
+      description: "快速响应，基础推理",
+    },
+    medium: {
+      label: "中等",
+      description: "平衡思考（默认）",
+    },
+    high: {
+      label: "较多",
+      description: "深度推理，适合复杂任务",
+    },
+    xhigh: {
+      label: "最多",
+      description: "最深推理，最高精度",
+    },
+  },
+
+  // 供应商
+  providers: {
+    claude: { label: "Claude Code" },
+    codex: { label: "Codex CLI" },
+    gemini: { label: "Gemini CLI" },
+    opencode: { label: "OpenCode" },
   },
 
   // 使用量标签

@@ -256,6 +256,11 @@ export type ThreadAction =
       requestId: number | string;
       workspaceId: string;
     }
+  | {
+      type: "clearUserInputRequestsForThread";
+      workspaceId: string;
+      threadId: string;
+    }
   | { type: "setThreadTokenUsage"; threadId: string; tokenUsage: ThreadTokenUsage }
   | {
       type: "setRateLimits";
@@ -693,6 +698,63 @@ function sliceByCompactStreamingLength(value: string, compactLength: number) {
   return "";
 }
 
+function takeByCompactStreamingLength(value: string, compactLength: number) {
+  if (compactLength <= 0) {
+    return "";
+  }
+  let count = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (!/\s/.test(value[index])) {
+      count += 1;
+    }
+    if (count >= compactLength) {
+      let end = index + 1;
+      while (end < value.length && /\s/.test(value[end])) {
+        end += 1;
+      }
+      return value.slice(0, end);
+    }
+  }
+  return value;
+}
+
+function mergeShiftedSnapshot(existing: string, delta: string) {
+  const comparableExisting = compactComparableStreamingText(existing);
+  const comparableDelta = compactComparableStreamingText(delta);
+  if (comparableExisting.length < 24 || comparableDelta.length < 24) {
+    return null;
+  }
+  if (comparableDelta.length < Math.floor(comparableExisting.length * 0.45)) {
+    return null;
+  }
+  const anchorLength = Math.min(
+    28,
+    Math.max(10, Math.floor(comparableDelta.length * 0.2)),
+  );
+  const deltaAnchor = comparableDelta.slice(0, anchorLength);
+  if (!deltaAnchor) {
+    return null;
+  }
+  const shiftIndex = comparableExisting.indexOf(deltaAnchor);
+  if (shiftIndex <= 0) {
+    return null;
+  }
+  const existingTail = comparableExisting.slice(shiftIndex);
+  const comparableOverlap = sharedPrefixLength(existingTail, comparableDelta);
+  const minComparableLength = Math.min(existingTail.length, comparableDelta.length);
+  if (
+    minComparableLength < 16 ||
+    comparableOverlap < Math.floor(minComparableLength * 0.72)
+  ) {
+    return null;
+  }
+  const existingPrefix = takeByCompactStreamingLength(existing, shiftIndex);
+  if (!existingPrefix.trim()) {
+    return null;
+  }
+  return `${existingPrefix}${delta}`;
+}
+
 function scoreParagraphFragmentation(value: string) {
   const segments = value
     .split(PARAGRAPH_BREAK_SPLIT_REGEX)
@@ -832,6 +894,10 @@ function mergeAgentMessageText(existing: string, delta: string) {
         return chooseReadableText(existing, normalizedDelta);
       }
     }
+    const shiftedSnapshot = mergeShiftedSnapshot(existing, normalizedDelta);
+    if (shiftedSnapshot) {
+      return chooseReadableText(existing, shiftedSnapshot);
+    }
   }
   return mergeStreamingText(existing, normalizedDelta);
 }
@@ -841,20 +907,49 @@ function mergeReasoningText(existing: string, delta: string) {
 }
 
 function mergeCompletedAgentText(existing: string, completed: string) {
-  if (!completed) {
+  const normalizedCompleted = normalizeCompletedAssistantText(completed);
+  if (!normalizedCompleted) {
     return existing;
   }
   if (!existing) {
-    return completed;
+    return normalizedCompleted;
   }
   const compactExisting = compactStreamingText(existing);
-  const compactCompleted = compactStreamingText(completed);
+  const compactCompleted = compactStreamingText(normalizedCompleted);
   if (!compactExisting || !compactCompleted) {
-    return completed;
+    return normalizedCompleted;
   }
 
   if (compactCompleted === compactExisting) {
-    return chooseReadableText(existing, completed);
+    return chooseReadableText(existing, normalizedCompleted);
+  }
+
+  const comparableExisting = compactComparableStreamingText(existing);
+  const comparableCompleted = compactComparableStreamingText(normalizedCompleted);
+  if (comparableExisting && comparableCompleted) {
+    const comparableLengthDelta = Math.abs(
+      comparableCompleted.length - comparableExisting.length,
+    );
+    const sharedComparablePrefix = sharedPrefixLength(
+      comparableExisting,
+      comparableCompleted,
+    );
+    if (
+      Math.min(comparableExisting.length, comparableCompleted.length) >= 24 &&
+      comparableLengthDelta <= 6 &&
+      sharedComparablePrefix >= 6
+    ) {
+      const existingTailAnchor = tailAnchor(comparableExisting);
+      const completedTailAnchor = tailAnchor(comparableCompleted);
+      if (
+        existingTailAnchor.length >= 8 &&
+        completedTailAnchor.length >= 8 &&
+        comparableCompleted.includes(existingTailAnchor) &&
+        comparableExisting.includes(completedTailAnchor)
+      ) {
+        return chooseReadableText(existing, normalizedCompleted);
+      }
+    }
   }
 
   const repeatedFromStart =
@@ -864,12 +959,42 @@ function mergeCompletedAgentText(existing: string, completed: string) {
     compactCompleted.indexOf(compactExisting, 1) >= compactExisting.length;
   if (
     repeatedFromStart &&
-    scoreParagraphFragmentation(completed) > scoreParagraphFragmentation(existing)
+    scoreParagraphFragmentation(normalizedCompleted) > scoreParagraphFragmentation(existing)
   ) {
     return existing;
   }
 
-  return mergeAgentMessageText(existing, completed);
+  return normalizeCompletedAssistantText(mergeAgentMessageText(existing, normalizedCompleted));
+}
+
+function normalizeCompletedAssistantText(value: string) {
+  const normalizedMessage = normalizeItem({
+    id: "__completed-assistant-normalization__",
+    kind: "message",
+    role: "assistant",
+    text: value,
+  });
+  const normalizedByItem =
+    normalizedMessage.kind === "message" ? normalizedMessage.text : value;
+  if (normalizedByItem && normalizedByItem !== value) {
+    return normalizedByItem;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return value;
+  }
+
+  // 非 markdown 普通文本里，偶发会收到 "A + 空白 + A" 的重复 completed payload。
+  // 这里优先压缩为单份，避免最终气泡出现整段重复拼接。
+  if (!/```/.test(trimmed) && !looksLikeMarkdownBlockStart(trimmed)) {
+    const directRepeat = trimmed.match(/^([\s\S]{12,}?)\s+\1$/);
+    if (directRepeat?.[1]) {
+      return directRepeat[1].trim();
+    }
+  }
+
+  return value;
 }
 
 function findAssistantMessageIndexById(
@@ -2085,6 +2210,15 @@ export function threadReducer(state: ThreadState, action: ThreadAction): ThreadS
           (item) =>
             item.request_id !== action.requestId ||
             item.workspace_id !== action.workspaceId,
+        ),
+      };
+    case "clearUserInputRequestsForThread":
+      return {
+        ...state,
+        userInputRequests: state.userInputRequests.filter(
+          (item) =>
+            item.workspace_id !== action.workspaceId ||
+            item.params.thread_id !== action.threadId,
         ),
       };
     case "setThreads": {
