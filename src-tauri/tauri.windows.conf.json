@@ -3,6 +3,7 @@
     "windows": []
   },
   "bundle": {
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": false,
+    "targets": ["nsis"]
   }
 }
